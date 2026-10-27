@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QUM harness — widget 框架验收页（Task 8）</title>
+<style>
+  /* 最简宿主替身：深色窗体 + 底部假 composer，演示锚点挂载。 */
+  html, body { margin: 0; height: 100%; font-family: sans-serif; background: #1e1f24; color: #c9cdd6; }
+  .app-title { padding: 24px; font-size: 14px; opacity: 0.7; }
+  .composer { position: absolute; bottom: 64px; left: 50%; transform: translateX(-50%);
+    width: 620px; max-width: 90vw; border: 1px solid #3a3d45; border-radius: 10px;
+    padding: 12px; background: #26272e; }
+  .composer [data-turn-status-bar] { margin-top: 8px; font-size: 11px; opacity: 0.6; }
+</style>
+</head>
+<body>
+  <div class="app-title">Qoder Usage Monitor — harness（daemon /harness/ 伺服）</div>
+
+  <!-- 假 composer：2026-10-21 起 widget 把 strip 挂到该卡片末尾（输入框底部）。
+       带 [data-chat-composer] 才是真机宿主；P3 的会话 pane 替身属性仍保留。 -->
+  <div class="composer" id="fake-composer" data-active="1" data-chat-composer="1">
+    <div>（假输入区）</div>
+    <div data-turn-status-bar="1">turn status bar</div>
+  </div>
+
+  <script type="module">
+    // 打开方式（daemon 需带 QUM_HARNESS_DIR=tests/harness，默认即是）：
+    //   http://127.0.0.1:<port>/harness/                       —— 仅 mock 数据，不轮询
+    //   http://127.0.0.1:<port>/harness/?token=<QUM_HOME/daemon.token 内容>  —— 真实 /state 轮询
+    //   http://127.0.0.1:<port>/harness/?bootstrap=<bootstrap.json 的 code>  —— 演示 bootstrap 换 token
+    // P3 真实轮询要看「当前会话」数据时须带 ?sid=<真实会话 id>（否则 daemon 认为该会话无数据 →
+    // 三个会话级模块出空态；这是设计内的诚实呈现，不是故障）。取 sid：
+    //   curl -s -H "X-QM-Token: $(cat ~/.qoder-monitor/daemon.token)" http://127.0.0.1:<port>/state \
+    //     | python3 -c "import json,sys;print(json.load(sys.stdin)['local']['session']['id'])"
+    // widget.css 由 widget.js 按 import.meta.url 自动注入（/app/widget.css）。
+    import { __QUM__ } from '/app/widget.js';
+    import '/app/modules.js'; // Task 9：P1 模块自注册 + setFmt（先于 mount，注册表即刻就绪）
+
+    const res = await fetch('/harness/mock-state.json');
+    const mock = await res.json();
+    __QUM__.setState(mock);
+
+    const q = new URLSearchParams(window.location.search);
+    // 假 pane 的会话身份：?sid= 优先，否则用 mock 的锚定会话（纯 mock 模式下 ≡ 全局数据）。
+    // 必须在 mount() 之前落好——widget 首帧就按它解析活动会话。
+    // ?nopane=1 故意不给 sid → 模拟"取不到当前会话身份"（客户端改版致 DOM 钩子失效），应出五列 --。
+    if (q.get('nopane') !== '1') {
+      document.getElementById('fake-composer').dataset.chatSessionId =
+        q.get('sid') || (mock.local.session && mock.local.session.id) || '';
+    }
+    // ?panel=1 预置展开态（默认收起，只看底栏），便于截面板。
+    if (q.get('panel') === '1') {
+      localStorage.setItem('qum.layout.v1', JSON.stringify({
+        miniSlots: ['tokens', 'credits', 'tps', 'turnsec'], collapsed: false,
+      }));
+    }
+    __QUM__.mount(document.body, {
+      baseUrl: '', // 同源即 daemon
+      token: q.get('token'),
+      bootstrapCode: q.get('bootstrap'),
+    });
+  </script>
+</body>
+</html>

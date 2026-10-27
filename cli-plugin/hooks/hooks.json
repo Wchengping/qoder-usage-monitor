@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'R=$(cat \"${QUM_HOME:-$HOME/.qoder-monitor}/repo-path\" 2>/dev/null); if [ -n \"$R\" ] && [ -f \"$R/daemon/server.mjs\" ]; then node \"$R/daemon/server.mjs\" --ensure --qm-role=qum-daemon; fi; exit 0'",
+            "timeout": 15,
+            "async": true
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,36 @@
+node_modules/
+build/
+.superpowers/
+
+# 运行时数据与凭据：正式路径是 ~/.qoder-monitor/，此处防误拷/误提交进仓库
+.qoder-monitor/
+bootstrap.json
+daemon.token
+*.token
+patch-state.json
+pending-install.json
+repo-path
+scan-cache.json
+timing-cache.json
+quota-history.jsonl
+history.jsonl
+state.json
+debug.json
+
+# 构建/补丁产物（含内嵌 bootstrap）
+*.asar
+*.asar.new
+*.asar.orig
+*.asar.unpacked/
+*.orig
+
+# 本地验收截图
+docs/acceptance/*.png
+
+# 本机与编辑器
+.env
+.env.*
+.DS_Store
+.vscode/
+.idea/
+*.log

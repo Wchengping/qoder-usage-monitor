@@ -1,0 +1,76 @@
+{
+  "usage": {
+    "displayMode": "qoder",
+    "qoderUsage": {
+      "userType": "personal_free",
+      "expiresAt": 253402214400000,
+      "upgradeUrl": "https://qoder.com/pricing?client=qoder",
+      "userQuota": {
+        "total": 0,
+        "used": 0,
+        "remaining": 0,
+        "percentage": 0,
+        "unit": "credits"
+      },
+      "addOnQuota": {
+        "total": 1200,
+        "used": 750,
+        "remaining": 450,
+        "percentage": 63,
+        "unit": "credits"
+      },
+      "dedicatedResourcePackages": [],
+      "orgResourcePackage": null
+    }
+  },
+  "plan": {
+    "userType": "personal_free",
+    "planTierName": "Free",
+    "isHighestTier": false,
+    "isPersonalVersion": true,
+    "organization": null
+  },
+  "heatmap": {
+    "days": [
+      {
+        "date": "2026-10-07",
+        "credits": 0
+      },
+      {
+        "date": "2026-10-08",
+        "credits": 44.8
+      },
+      {
+        "date": "2026-10-09",
+        "credits": 86.4
+      },
+      {
+        "date": "2026-10-10",
+        "credits": 52.6
+      }
+    ]
+  },
+  "metrics": {
+    "totalCredits": 1280.4,
+    "peakCredits": 86.4,
+    "currentStreakDays": 4,
+    "longestStreakDays": 9,
+    "totalActiveDays": 23,
+    "failedSources": []
+  },
+  "models": [
+    {
+      "modelKey": "11111111-1111-4111-8111-111111111111",
+      "modelDisplayName": "DeepSeek-Flash",
+      "typeDisplayName": "BYOK",
+      "byok": true,
+      "outerProvider": "custom"
+    },
+    {
+      "modelKey": "qoder/qfmodel",
+      "modelDisplayName": "Qoder Model",
+      "typeDisplayName": "Built-in",
+      "byok": false
+    }
+  ]
+}

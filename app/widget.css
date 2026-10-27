@@ -1,0 +1,332 @@
+/* app/widget.css — Qoder Usage Monitor widget（Task 8）
+ * 层级裁定：strip 在文档流内（非 overlay，无 z-index）；仅 panel 是 overlay，
+ * z-index: 9999（避开 Electron 弹层/splash 的高 z 段）。
+ * fixed 降级（data-qum-fallback="fixed"）是唯一让 root 脱离文档流的形态。 */
+
+#qum-root {
+  position: relative;          /* panel 以 strip 为定位基准向上展开 */
+  font-size: 12px;
+  line-height: 1.4;
+  font-family: -apple-system, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif;
+  --qum-fg: #33343a;
+  --qum-bg: #f2f3f5;
+  --qum-border: #d9dbe0;
+  --qum-muted: #8b8e98;
+  --qum-accent: #3b82f6;
+  --qum-track: #e3e5e9;
+  --qum-tick: #f59e0b;
+}
+
+#qum-root.qum-fixed {
+  position: fixed;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9999;
+}
+
+/* 2026-10-21 用户裁定：插件信息放进对话输入框底部。
+ * root 是 [data-chat-composer] 的最后一个子节点；order 再压一层，防 React 追加节点把它挤离底部。
+ * 2026-10-22 二次裁定：紧贴工具栏下方，不留外边距（视觉上与输入框工具栏连成一体），
+ * 卡片内不再自带外框/底色，只留一条上分隔线。 */
+#qum-root.qum-in-composer {
+  order: 999;
+  margin: 0;
+}
+#qum-root.qum-in-composer .qum-strip {
+  border: 0;
+  border-top: 1px solid var(--qum-border);
+  border-radius: 0;
+  background: transparent;
+}
+
+/* Strip v6 通栏横条（2026-10-22 用户裁定）：占满所在整行（root 宽度即宿主 composer 列宽），
+ * 四列单行式（模型槽与标签行已删除），列间 1px 竖直分隔线（首列左侧无）；圆角取小（落地微调）。 */
+.qum-strip {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  width: 100%;
+  max-width: 100%;
+  min-height: 24px;            /* 单行内容不挤压（v6 去标签行后收紧） */
+  padding: 0;                  /* 槽列自带内边距，分隔线贴齐 */
+  box-sizing: border-box;
+  border: 1px solid var(--qum-border);
+  border-radius: 8px;
+  background: var(--qum-bg);
+  color: var(--qum-fg);
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+  overflow: hidden;
+}
+
+#qum-root .qum-strip[data-qum-offline="1"] {
+  opacity: 0.45;
+  filter: grayscale(1);        /* daemon 不可达：灰显（轮询失败时由 widget.js 置属性） */
+}
+
+/* Strip v6 单行式槽列：仅数值（标签行已删），水平居中；左对齐。 */
+.qum-slot {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 10px;
+  white-space: nowrap;
+}
+
+.qum-slot + .qum-slot {
+  border-left: 1px solid var(--qum-border); /* 列间竖直分隔线（首列左侧无） */
+}
+
+.qum-slot-value {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.1;
+}
+
+/* v7（2026-10-26 用户裁定：对齐客户端原生底栏）：会话簇是底栏主信息，用强调色；
+ * 仍是普通 `.qum-slot`（不新增槽位语义，迁移/布局偏好照旧）。 */
+.qum-slot-session {
+  color: var(--qum-accent);
+}
+
+.qum-slot-session .qum-slot-value {
+  color: var(--qum-accent);
+  font-weight: 600;
+}
+
+/* v7 悬停摘要卡：折叠态悬停 strip 时向上覆盖显示（原生同款）；pointer-events:none
+ * 保证卡本身不抢鼠标（移出 strip 即收起，不挡宿主交互）。展开面板时由 JS 收起。 */
+.qum-hover {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 9999;
+  display: grid;
+  gap: 3px;
+  min-width: 300px;
+  max-width: min(560px, 92vw);
+  padding: 8px 10px;
+  border: 1px solid var(--qum-border);
+  border-radius: 10px;
+  background: var(--qum-bg);
+  color: var(--qum-fg);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.qum-hover[hidden] { display: none; }
+
+.qum-hover-title {
+  font-weight: 600;
+  font-size: 12px;
+  margin-bottom: 1px;
+}
+
+.qum-hover-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.qum-hover-key { color: var(--qum-muted); }
+
+.qum-hover-val {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  text-align: right;
+}
+
+.qum-hover-foot {
+  margin-top: 2px;
+  padding-top: 3px;
+  border-top: 1px solid var(--qum-border);
+  color: var(--qum-muted);
+  font-size: 11px;
+}
+
+/* 底栏尾部「分析」列（折叠态元信息，用户裁定）：daemon 上次分析时刻 MM/DD HH:MM:SS，
+ * margin-left:auto 右贴边、字号略小并弱化，避免与四槽真值抢视觉；非 qum-slot（不参与
+ * 槽位迁移/布局偏好），但沿用同一条竖直分隔线保持列感。v6：只显数值（无标签行）。 */
+.qum-analysis {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-end;
+  margin-left: auto;
+  padding: 3px 10px;
+  border-left: 1px solid var(--qum-border);
+  text-align: right;
+  white-space: nowrap;
+  opacity: 0.75;
+}
+
+.qum-analysis-value {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums; /* 等宽数字：每轮刷新不抖列宽 */
+}
+
+.qum-empty {                   /* lastTurn 缺位：整条单文本「暂无回合数据」 */
+  padding: 3px 10px;
+  opacity: 0.7;
+}
+
+.qum-panel {
+  position: absolute;
+  bottom: calc(100% + 6px);    /* 从底栏向上展开 */
+  left: 0;
+  z-index: 9999;               /* 仅 panel overlay */
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 420px;
+  max-width: min(680px, 92vw);
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 10px;
+  border: 1px solid var(--qum-border);
+  border-radius: 12px;
+  background: var(--qum-bg);
+  color: var(--qum-fg);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+}
+
+.qum-panel[hidden] { display: none; } /* 覆盖上面的 display:grid，hidden 属性生效 */
+
+.qum-cell {
+  border: 1px solid var(--qum-border);
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: color-mix(in srgb, var(--qum-bg) 60%, transparent);
+}
+
+.qum-cell-half { grid-column: span 1; } /* 两个一行 */
+.qum-cell-full { grid-column: span 2; }
+
+.qum-module-title {
+  font-weight: 600;
+  opacity: 0.85;
+  margin-bottom: 4px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+  user-select: none;
+}
+
+.qum-collapse { opacity: 0.6; font-size: 11px; }
+
+/* 一级折叠（P2）：折叠态只留标题栏（body 与 tick 注入内容全隐藏） */
+.qum-cell.qum-collapsed > *:not(.qum-module-title) { display: none; }
+.qum-cell.qum-collapsed .qum-module-title { margin-bottom: 0; }
+
+/* 进度条族：模块（Task 9）按此结构渲染 */
+.qum-bar {
+  position: relative;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--qum-track);
+}
+
+.qum-bar-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  border-radius: 2px;
+  background: var(--qum-accent);
+}
+
+.qum-pace-tick {               /* 匀速参照线刻度 */
+  position: absolute;
+  top: -2px;
+  width: 2px;
+  height: 8px;
+  border-radius: 1px;
+  background: var(--qum-tick);
+  transform: translateX(-50%);
+}
+
+/* T13 用量热力（heatmap 模块 full）：每日格的紧凑网格，宽度自适应面板半格。
+ * 有值格的 alpha 由模块按 credits/max 写成 inline color-mix(var(--qum-accent) N%)，
+ * 0/null 日不留 inline → 落到 .qum-heat-cell 的轨道底色（空格）。 */
+.qum-heat {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(9px, 1fr));
+  gap: 2px;
+  margin-top: 2px;
+}
+
+.qum-heat-cell {
+  height: 12px;
+  min-width: 9px;
+  border-radius: 2px;
+  background: var(--qum-track);
+}
+
+.qum-note {                    /* 模块级诚实说明（无数据/数据源失败） */
+  margin-top: 3px;
+  color: var(--qum-muted);
+  font-size: 11px;
+}
+
+@media (prefers-color-scheme: dark) {
+  #qum-root {
+    --qum-fg: #d5d8de;
+    --qum-bg: #26272e;
+    --qum-border: #3a3d45;
+    --qum-muted: #7c8089;
+    --qum-accent: #60a5fa;
+    --qum-track: #3a3d45;
+    --qum-tick: #fbbf24;
+  }
+  .qum-panel { box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5); }
+  .qum-heat-cell { box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06); }
+}
+
+/* 会话明细二级手风琴（P2） */
+.qum-session-item { display: flex; align-items: baseline; flex-wrap: wrap; }
+.qum-session-item > .qum-line { flex: 1 1 auto; }
+/* P3：当前会话行锚点（左侧 2px 主色描边；纯装饰，不改行高与内容布局）。 */
+.qum-session-active { border-left: 2px solid var(--qum-accent); padding-left: 4px; }
+.qum-session-caret { opacity: 0.6; font-size: 11px; margin-right: 4px; }
+.qum-session-detail { flex-basis: 100%; padding-left: 12px; opacity: 0.9; }
+
+/* 「按模型消耗」模块（P2 修订④）：全宽卡片列表 */
+.qum-models-toolbar { display: flex; justify-content: flex-end; align-items: center; gap: 4px; margin-bottom: 4px; }
+.qum-models-sort { max-width: 40%; }
+.qum-models-legend { font-size: 11px; opacity: 0.7; margin-bottom: 6px; }
+.qum-models-list { display: flex; flex-direction: column; gap: 8px; }
+.qum-models-card { border: 1px solid var(--qum-border); border-radius: 6px; padding: 8px 10px; background: color-mix(in srgb, var(--qum-bg) 60%, transparent); }
+.qum-models-head { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.qum-models-name { font-weight: 600; }
+/* 2026-10-22 用户裁定：仅确有缓存读取（cacheRead>0）的模型出命中率徽标；
+ * 无缓存的模型不渲染节点，不补 0%，不新增空列。 */
+.qum-models-cache {
+  display: inline-flex;
+  align-items: center;
+  height: 17px;
+  padding: 0 6px;
+  border: 1px solid color-mix(in srgb, var(--qum-accent) 30%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--qum-accent) 12%, transparent);
+  color: color-mix(in srgb, var(--qum-accent) 72%, var(--qum-fg));
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.qum-models-cols { display: flex; flex-wrap: wrap; gap: 14px; }
+.qum-models-label { font-size: 11px; opacity: 0.6; }
+.qum-models-value { font-weight: 600; font-size: 15px; }
+.qum-models-track { height: 6px; border-radius: 3px; overflow: hidden; margin-top: 8px; background: var(--qum-track); }
+.qum-models-bar { height: 100%; border-radius: 3px; }
+.qum-models-lit { display: block; height: 100%; border-radius: 3px 0 0 3px; background: rgba(255, 255, 255, 0.55); }

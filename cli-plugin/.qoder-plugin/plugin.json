@@ -1,0 +1,8 @@
+{
+  "name": "qoder-usage-monitor-ops",
+  "displayName": "Qoder 用量监控运维",
+  "version": "0.1.0",
+  "description": "Qoder 用量监控运维插件：安装/重装/卸载 asar 补丁、客户端更新检测、doctor 八项自检、余额排查；SessionStart hook 幂等保活本地 daemon。",
+  "skills": "./skills/",
+  "hooks": "./hooks/hooks.json"
+}

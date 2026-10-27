@@ -1,0 +1,908 @@
+{
+  "meta": {
+    "generatedAt": 1791604800000,
+    "daemonVersion": "0.1.0",
+    "scanErrors": []
+  },
+  "local": {
+    "window5h": {
+      "input": 482130,
+      "output": 31844,
+      "cacheRead": 0,
+      "cacheCreate": 0,
+      "turns": 46,
+      "speedTps": 182.4,
+      "cacheHitRate": null,
+      "resetAt": 1791604800000,
+      "paceRatio": 0.62,
+      "credits": 34.8,
+      "billedInput": 45600,
+      "billedInputSource": "runtime-config",
+      "byAgent": {
+        "main": {
+          "input": 401220,
+          "output": 27931,
+          "cacheRead": 2755120,
+          "cacheCreate": 198440,
+          "turns": 39,
+          "speedTps": 176.9,
+          "cacheHitRate": 0.858,
+          "credits": 28.9,
+          "creditsBillable": null,
+          "creditsFree": null
+        },
+        "sub": {
+          "input": 80910,
+          "output": 3913,
+          "cacheRead": 365330,
+          "cacheCreate": 40460,
+          "turns": 7,
+          "speedTps": 210.5,
+          "cacheHitRate": 0.879,
+          "credits": 5.9,
+          "creditsBillable": null,
+          "creditsFree": null
+        }
+      },
+      "creditsBillable": null,
+      "creditsFree": null
+    },
+    "week": {
+      "input": 3912770,
+      "output": 260415,
+      "cacheRead": 24813300,
+      "cacheCreate": 1888420,
+      "turns": 351,
+      "speedTps": 165.2,
+      "cacheHitRate": 0.919,
+      "resetAt": 1791748800000,
+      "paceRatio": 0.41,
+      "credits": 142.6,
+      "billedInput": 310000,
+      "billedInputSource": "fallback200k",
+      "byAgent": {
+        "main": {
+          "input": 3320810,
+          "output": 229402,
+          "cacheRead": 21900450,
+          "cacheCreate": 1571220,
+          "turns": 302,
+          "speedTps": 160.1,
+          "cacheHitRate": 0.918,
+          "credits": 121.4,
+          "creditsBillable": null,
+          "creditsFree": null
+        },
+        "sub": {
+          "input": 591960,
+          "output": 31013,
+          "cacheRead": 2912850,
+          "cacheCreate": 317200,
+          "turns": 49,
+          "speedTps": 192.7,
+          "cacheHitRate": 0.924,
+          "credits": 21.2,
+          "creditsBillable": null,
+          "creditsFree": null
+        }
+      },
+      "creditsBillable": null,
+      "creditsFree": null
+    },
+    "today": {
+      "input": 964320,
+      "output": 63110,
+      "cacheRead": 6051900,
+      "cacheCreate": 452300,
+      "turns": 88,
+      "speedTps": 174.8,
+      "cacheHitRate": 0.864,
+      "resetAt": 1791648000000,
+      "paceRatio": 0.5,
+      "credits": 52.6,
+      "billedInput": 82000,
+      "billedInputSource": "mixed",
+      "byAgent": {
+        "main": {
+          "input": 812240,
+          "output": 54301,
+          "cacheRead": 5201480,
+          "cacheCreate": 388120,
+          "turns": 74,
+          "speedTps": 169.5,
+          "cacheHitRate": 0.862,
+          "credits": 38.9,
+          "creditsBillable": null,
+          "creditsFree": null
+        },
+        "sub": {
+          "input": 152080,
+          "output": 8809,
+          "cacheRead": 850420,
+          "cacheCreate": 64180,
+          "turns": 14,
+          "speedTps": 201.4,
+          "cacheHitRate": 0.876,
+          "credits": 13.7,
+          "creditsBillable": null,
+          "creditsFree": null
+        }
+      },
+      "creditsBillable": null,
+      "creditsFree": null
+    },
+    "session": {
+      "id": "mock-session-abc123",
+      "credits": 123.4,
+      "turns": 41,
+      "rateCpm30": 2.1,
+      "billedInput": 128000,
+      "avgTurnSec": 45,
+      "model": "qfmodel",
+      "modelName": null,
+      "tps30": 12300,
+      "outTps30": 45.6,
+      "totalTurnSec": 262,
+      "byModel": [
+        {
+          "model": "qfmodel",
+          "modelName": null,
+          "billingMode": "credits",
+          "credits": 0.6,
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheCreate": 0,
+          "billedInput": 48123,
+          "billedSource": "fallback200k",
+          "turns": 3,
+          "outTps": 56.5,
+          "avgTurnSec": 66,
+          "creditsBillable": null,
+          "creditsFree": null
+        },
+        {
+          "model": "qoder-custom-22222222-2222-4222-8222-222222222222/mimo-v2.6-flash",
+          "modelName": "Mimo-V2.6",
+          "billingMode": "tokens",
+          "credits": null,
+          "input": 7000,
+          "output": 500,
+          "cacheRead": 96000,
+          "cacheCreate": 1000,
+          "billedInput": null,
+          "billedSource": null,
+          "turns": 1,
+          "outTps": 46,
+          "avgTurnSec": 41,
+          "creditsBillable": null,
+          "creditsFree": null
+        }
+      ],
+      "rounds": 23,
+      "requests": 187,
+      "cacheHitRate": 0.861,
+      "firstTs": 1791518400000,
+      "lastTs": 1791604800000,
+      "outEst": 94,
+      "outEstThk": 25,
+      "outEstTxt": 49,
+      "outEstCall": 20,
+      "tools": {
+        "calls": 42,
+        "errors": 3,
+        "byName": [
+          {
+            "name": "Read",
+            "calls": 18,
+            "errors": 0
+          },
+          {
+            "name": "Edit",
+            "calls": 12,
+            "errors": 1
+          },
+          {
+            "name": "Bash",
+            "calls": 8,
+            "errors": 2
+          },
+          {
+            "name": "Write",
+            "calls": 4,
+            "errors": 0
+          }
+        ]
+      },
+      "edits": {
+        "added": 126,
+        "removed": 38,
+        "files": 7
+      },
+      "creditsBillable": null,
+      "creditsFree": null,
+      "rateCpm30Billable": null
+    },
+    "modelCatalogMeta": {
+      "count": 6,
+      "fetchedAt": 1791604740000
+    },
+    "contextWindow": {
+      "value": 200000,
+      "source": "fallback200k"
+    },
+    "lastTurn": {
+      "sessionId": "mock-session-abc123",
+      "promptTs": 1791604767600,
+      "endTs": 1791604800000,
+      "turnSec": 32.4,
+      "model": "qfmodel",
+      "modelName": null,
+      "billingMode": "credits",
+      "credits": 0.6,
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheCreate": 0,
+      "billedInput": 48123,
+      "billedSource": "fallback200k",
+      "outTps": 56.5,
+      "creditsBillable": null,
+      "creditsFree": null
+    },
+    "byModelWindow": {
+      "windowStart": 1791043200000,
+      "todayStart": 1791561600000,
+      "rows": [
+        {
+          "model": "11111111-1111-4111-8111-111111111111",
+          "modelName": "DeepSeek-Flash",
+          "billingMode": "credits",
+          "creditsToday": 29,
+          "credits7d": 912,
+          "input": 1240000,
+          "output": 385000,
+          "cacheRead": 57000000,
+          "cacheCreate": 275000,
+          "billedInput": null,
+          "billedSource": null,
+          "turns": 63,
+          "outTps": 52.5,
+          "avgTurnSec": 63,
+          "creditsTodayBillable": null,
+          "credits7dBillable": null,
+          "creditsTodayFree": null,
+          "credits7dFree": null
+        },
+        {
+          "model": "qwen3.8-27b",
+          "modelName": "Qwen3.8-27B",
+          "billingMode": "credits",
+          "creditsToday": 6,
+          "credits7d": 128,
+          "input": 320000,
+          "output": 80000,
+          "cacheRead": 8000000,
+          "cacheCreate": 200000,
+          "billedInput": 210000,
+          "billedSource": "runtime-config",
+          "turns": 22,
+          "outTps": 48.2,
+          "avgTurnSec": 71,
+          "creditsTodayBillable": null,
+          "credits7dBillable": null,
+          "creditsTodayFree": null,
+          "credits7dFree": null
+        },
+        {
+          "model": "glm-5.3",
+          "modelName": "GLM-5.3",
+          "billingMode": "credits",
+          "creditsToday": 3,
+          "credits7d": 43,
+          "input": 150000,
+          "output": 50000,
+          "cacheRead": 3600000,
+          "cacheCreate": 100000,
+          "billedInput": 90000,
+          "billedSource": "runtime-config",
+          "turns": 9,
+          "outTps": 44.1,
+          "avgTurnSec": 88,
+          "creditsTodayBillable": null,
+          "credits7dBillable": null,
+          "creditsTodayFree": null,
+          "credits7dFree": null
+        },
+        {
+          "model": "kimi-k3",
+          "modelName": "Kimi K3",
+          "billingMode": "credits",
+          "creditsToday": 1,
+          "credits7d": 15,
+          "input": 120000,
+          "output": 30000,
+          "cacheRead": 3250000,
+          "cacheCreate": 100000,
+          "billedInput": 40000,
+          "billedSource": "fallback200k",
+          "turns": 4,
+          "outTps": 39.8,
+          "avgTurnSec": 74,
+          "creditsTodayBillable": null,
+          "credits7dBillable": null,
+          "creditsTodayFree": null,
+          "credits7dFree": null
+        },
+        {
+          "model": "qoder-custom-22222222-2222-4222-8222-222222222222/mimo-v2.6-flash",
+          "modelName": "Mimo-V2.6",
+          "billingMode": "tokens",
+          "creditsToday": null,
+          "credits7d": null,
+          "input": 25000,
+          "output": 0,
+          "cacheRead": 1175000,
+          "cacheCreate": 0,
+          "billedInput": null,
+          "billedSource": null,
+          "turns": 5,
+          "outTps": 46,
+          "avgTurnSec": 41,
+          "creditsTodayBillable": null,
+          "credits7dBillable": null,
+          "creditsTodayFree": null,
+          "credits7dFree": null
+        }
+      ]
+    },
+    "active": {
+      "sessionId": "mock-session-abc123",
+      "lastTurn": {
+        "sessionId": "mock-session-abc123",
+        "promptTs": 1791604767600,
+        "endTs": 1791604800000,
+        "turnSec": 32.4,
+        "model": "qfmodel",
+        "modelName": null,
+        "billingMode": "credits",
+        "credits": 0.6,
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheCreate": 0,
+        "billedInput": 48123,
+        "billedSource": "fallback200k",
+        "outTps": 56.5
+      },
+      "session": {
+        "id": "mock-session-abc123",
+        "credits": 123.4,
+        "turns": 41,
+        "rateCpm30": 2.1,
+        "billedInput": 128000,
+        "avgTurnSec": 45,
+        "model": "qfmodel",
+        "modelName": null,
+        "tps30": 12300,
+        "outTps30": 45.6,
+        "totalTurnSec": 262,
+        "byModel": [
+          {
+            "model": "qfmodel",
+            "modelName": null,
+            "billingMode": "credits",
+            "credits": 0.6,
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheCreate": 0,
+            "billedInput": 48123,
+            "billedSource": "fallback200k",
+            "turns": 3,
+            "outTps": 56.5,
+            "avgTurnSec": 66,
+            "creditsBillable": null,
+            "creditsFree": null
+          },
+          {
+            "model": "qoder-custom-22222222-2222-4222-8222-222222222222/mimo-v2.6-flash",
+            "modelName": "Mimo-V2.6",
+            "billingMode": "tokens",
+            "credits": null,
+            "input": 7000,
+            "output": 500,
+            "cacheRead": 96000,
+            "cacheCreate": 1000,
+            "billedInput": null,
+            "billedSource": null,
+            "turns": 1,
+            "outTps": 46,
+            "avgTurnSec": 41,
+            "creditsBillable": null,
+            "creditsFree": null
+          }
+        ],
+        "rounds": 23,
+        "requests": 187,
+        "cacheHitRate": 0.861,
+        "firstTs": 1791518400000,
+        "lastTs": 1791604800000,
+        "outEst": 94,
+        "outEstThk": 25,
+        "outEstTxt": 49,
+        "outEstCall": 20,
+        "tools": {
+          "calls": 42,
+          "errors": 3,
+          "byName": [
+            {
+              "name": "Read",
+              "calls": 18,
+              "errors": 0
+            },
+            {
+              "name": "Edit",
+              "calls": 12,
+              "errors": 1
+            },
+            {
+              "name": "Bash",
+              "calls": 8,
+              "errors": 2
+            },
+            {
+              "name": "Write",
+              "calls": 4,
+              "errors": 0
+            }
+          ]
+        },
+        "edits": {
+          "added": 126,
+          "removed": 38,
+          "files": 7
+        },
+        "creditsBillable": null,
+        "creditsFree": null,
+        "rateCpm30Billable": null
+      }
+    },
+    "sessions": [
+      {
+        "id": "mock-session-abc123",
+        "model": "qfmodel",
+        "modelName": null,
+        "credits": 123.4,
+        "billedInput": 128000,
+        "billedSource": "mixed",
+        "turns": 41,
+        "lastTs": 1791604800000,
+        "avgTurnSec": 45,
+        "byModel": [
+          {
+            "model": "qfmodel",
+            "modelName": null,
+            "billingMode": "credits",
+            "credits": 0.6,
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheCreate": 0,
+            "billedInput": 48123,
+            "billedSource": "fallback200k",
+            "turns": 3,
+            "outTps": 56.5,
+            "avgTurnSec": 66,
+            "creditsBillable": null,
+            "creditsFree": null
+          },
+          {
+            "model": "qoder-custom-22222222-2222-4222-8222-222222222222/mimo-v2.6-flash",
+            "modelName": "Mimo-V2.6",
+            "billingMode": "tokens",
+            "credits": null,
+            "input": 7000,
+            "output": 500,
+            "cacheRead": 96000,
+            "cacheCreate": 1000,
+            "billedInput": null,
+            "billedSource": null,
+            "turns": 1,
+            "outTps": 46,
+            "avgTurnSec": 41,
+            "creditsBillable": null,
+            "creditsFree": null
+          }
+        ],
+        "rounds": 23,
+        "requests": 187,
+        "creditsBillable": null,
+        "creditsFree": null
+      },
+      {
+        "id": "mock-session-def456",
+        "model": "qfmodel",
+        "modelName": null,
+        "credits": 88.2,
+        "billedInput": 96000,
+        "billedSource": "runtime-config",
+        "turns": 30,
+        "lastTs": 1791598200000,
+        "avgTurnSec": 62,
+        "byModel": [
+          {
+            "model": "qfmodel",
+            "modelName": null,
+            "billingMode": "credits",
+            "credits": 88.2,
+            "input": 120000,
+            "output": 5200,
+            "cacheRead": 1600000,
+            "cacheCreate": 60000,
+            "billedInput": 96000,
+            "billedSource": "runtime-config",
+            "turns": 30,
+            "outTps": 44,
+            "avgTurnSec": 62,
+            "creditsBillable": null,
+            "creditsFree": null
+          }
+        ],
+        "rounds": 17,
+        "requests": 96,
+        "creditsBillable": null,
+        "creditsFree": null
+      },
+      {
+        "id": "mock-session-ghi789",
+        "model": "qfmodel-pro",
+        "modelName": null,
+        "credits": 12.1,
+        "billedInput": null,
+        "billedSource": null,
+        "turns": 8,
+        "lastTs": 1791591000000,
+        "avgTurnSec": null,
+        "byModel": [],
+        "rounds": 5,
+        "requests": 12,
+        "creditsBillable": null,
+        "creditsFree": null
+      }
+    ],
+    "history": [
+      {
+        "date": "2026-10-08",
+        "input": 2114020,
+        "output": 141230,
+        "cacheRead": 13302450,
+        "cacheCreate": 1002310,
+        "turns": 198,
+        "speedTps": 158.3,
+        "cacheHitRate": 0.902,
+        "credits": 44.8,
+        "main": {
+          "input": 1890320,
+          "output": 127900,
+          "cacheRead": 11902410,
+          "cacheCreate": 900220,
+          "turns": 172,
+          "speedTps": 155.1,
+          "cacheHitRate": 0.901,
+          "credits": 32.9,
+          "creditsBillable": null,
+          "creditsFree": null
+        },
+        "sub": {
+          "input": 223700,
+          "output": 13330,
+          "cacheRead": 1400040,
+          "cacheCreate": 102090,
+          "turns": 26,
+          "speedTps": 180.2,
+          "cacheHitRate": 0.908,
+          "credits": 11.9,
+          "creditsBillable": null,
+          "creditsFree": null
+        },
+        "creditsBillable": null,
+        "creditsFree": null
+      },
+      {
+        "date": "2026-10-09",
+        "input": 2851460,
+        "output": 187905,
+        "cacheRead": 17701400,
+        "cacheCreate": 1334120,
+        "turns": 263,
+        "speedTps": 162.9,
+        "cacheHitRate": 0.898,
+        "credits": 86.4,
+        "main": {
+          "input": 2544210,
+          "output": 170230,
+          "cacheRead": 15841900,
+          "cacheCreate": 1198450,
+          "turns": 228,
+          "speedTps": 159.8,
+          "cacheHitRate": 0.897,
+          "credits": 72.1,
+          "creditsBillable": null,
+          "creditsFree": null
+        },
+        "sub": {
+          "input": 307250,
+          "output": 17675,
+          "cacheRead": 1859500,
+          "cacheCreate": 135670,
+          "turns": 35,
+          "speedTps": 192.4,
+          "cacheHitRate": 0.902,
+          "credits": 14.3,
+          "creditsBillable": null,
+          "creditsFree": null
+        },
+        "creditsBillable": null,
+        "creditsFree": null
+      },
+      {
+        "date": "2026-10-10",
+        "input": 964320,
+        "output": 63110,
+        "cacheRead": 6051900,
+        "cacheCreate": 452300,
+        "turns": 88,
+        "speedTps": 174.8,
+        "cacheHitRate": 0.864,
+        "credits": 52.6,
+        "main": {
+          "input": 812240,
+          "output": 54301,
+          "cacheRead": 5201480,
+          "cacheCreate": 388120,
+          "turns": 74,
+          "speedTps": 169.5,
+          "cacheHitRate": 0.862,
+          "credits": 38.9,
+          "creditsBillable": null,
+          "creditsFree": null
+        },
+        "sub": {
+          "input": 152080,
+          "output": 8809,
+          "cacheRead": 850420,
+          "cacheCreate": 64180,
+          "turns": 14,
+          "speedTps": 201.4,
+          "cacheHitRate": 0.876,
+          "credits": 13.7,
+          "creditsBillable": null,
+          "creditsFree": null
+        },
+        "creditsBillable": null,
+        "creditsFree": null
+      }
+    ]
+  },
+  "modelCatalog": {
+    "fetchedAt": 1791604740000,
+    "entries": [
+      {
+        "modelKey": "11111111-1111-4111-8111-111111111111",
+        "modelDisplayName": "DeepSeek-Flash",
+        "typeDisplayName": "BYOK",
+        "byok": true
+      },
+      {
+        "modelKey": "qoder/qfmodel-lite",
+        "modelDisplayName": "Qoder Lite",
+        "typeDisplayName": "Built-in",
+        "byok": false
+      },
+      {
+        "modelKey": "mimo-v2.6-flash",
+        "modelDisplayName": "Mimo-V2.6",
+        "typeDisplayName": "BYOK",
+        "byok": true
+      },
+      {
+        "modelKey": "qwen3.8-27b",
+        "modelDisplayName": "Qwen3.8-27B",
+        "typeDisplayName": "Built-in",
+        "byok": false
+      },
+      {
+        "modelKey": "glm-5.3",
+        "modelDisplayName": "GLM-5.3",
+        "typeDisplayName": "Built-in",
+        "byok": false
+      },
+      {
+        "modelKey": "kimi-k3",
+        "modelDisplayName": "Kimi K3",
+        "typeDisplayName": "Built-in",
+        "byok": false
+      }
+    ]
+  },
+  "account": {
+    "source": "widget",
+    "fetchedAt": 1791604740000,
+    "raw": {
+      "usage": {
+        "displayMode": "qoder",
+        "qoderUsage": {
+          "userType": "personal_free",
+          "expiresAt": 253402214400000,
+          "upgradeUrl": "https://qoder.com/pricing?client=qoder",
+          "userQuota": {
+            "total": 0,
+            "used": 0,
+            "remaining": 0,
+            "percentage": 0,
+            "unit": "credits"
+          },
+          "addOnQuota": {
+            "total": 1200,
+            "used": 750,
+            "remaining": 450,
+            "percentage": 63,
+            "unit": "credits"
+          },
+          "dedicatedResourcePackages": [],
+          "orgResourcePackage": null
+        }
+      },
+      "plan": {
+        "userType": "personal_free",
+        "planTierName": "Free",
+        "isHighestTier": false,
+        "isPersonalVersion": true,
+        "organization": null
+      },
+      "heatmap": {
+        "days": [
+          {
+            "date": "2026-09-27",
+            "credits": 0
+          },
+          {
+            "date": "2026-09-28",
+            "credits": 9.6
+          },
+          {
+            "date": "2026-09-29",
+            "credits": 18.4
+          },
+          {
+            "date": "2026-09-30",
+            "credits": 7.2
+          },
+          {
+            "date": "2026-10-01",
+            "credits": 0
+          },
+          {
+            "date": "2026-10-02",
+            "credits": 24.6
+          },
+          {
+            "date": "2026-10-03",
+            "credits": 15.8
+          },
+          {
+            "date": "2026-10-04",
+            "credits": 33.2
+          },
+          {
+            "date": "2026-10-05",
+            "credits": 11.4
+          },
+          {
+            "date": "2026-10-06",
+            "credits": 28.7
+          },
+          {
+            "date": "2026-10-07",
+            "credits": null
+          },
+          {
+            "date": "2026-10-08",
+            "credits": 44.8
+          },
+          {
+            "date": "2026-10-09",
+            "credits": 86.4
+          },
+          {
+            "date": "2026-10-10",
+            "credits": 52.6
+          }
+        ]
+      },
+      "metrics": {
+        "totalCredits": 1280.4,
+        "peakCredits": 86.4,
+        "currentStreakDays": 4,
+        "longestStreakDays": 9,
+        "totalActiveDays": 23,
+        "failedSources": []
+      }
+    },
+    "packs": [],
+    "planRem": 0,
+    "packRem": 450,
+    "nextRefresh": null,
+    "heatmap": {
+      "source": "days",
+      "days": [
+        {
+          "date": "2026-09-27",
+          "credits": 0
+        },
+        {
+          "date": "2026-09-28",
+          "credits": 9.6
+        },
+        {
+          "date": "2026-09-29",
+          "credits": 18.4
+        },
+        {
+          "date": "2026-09-30",
+          "credits": 7.2
+        },
+        {
+          "date": "2026-10-01",
+          "credits": 0
+        },
+        {
+          "date": "2026-10-02",
+          "credits": 24.6
+        },
+        {
+          "date": "2026-10-03",
+          "credits": 15.8
+        },
+        {
+          "date": "2026-10-04",
+          "credits": 33.2
+        },
+        {
+          "date": "2026-10-05",
+          "credits": 11.4
+        },
+        {
+          "date": "2026-10-06",
+          "credits": 28.7
+        },
+        {
+          "date": "2026-10-07",
+          "credits": null
+        },
+        {
+          "date": "2026-10-08",
+          "credits": 44.8
+        },
+        {
+          "date": "2026-10-09",
+          "credits": 86.4
+        },
+        {
+          "date": "2026-10-10",
+          "credits": 52.6
+        }
+      ]
+    },
+    "metrics": {
+      "totalCredits": 1280.4,
+      "peakCredits": 86.4,
+      "currentStreakDays": 4,
+      "longestStreakDays": 9,
+      "totalActiveDays": 23,
+      "failedSources": []
+    }
+  },
+  "external": null
+}

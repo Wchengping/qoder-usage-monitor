@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QUM 预览 — P2 视觉验收（临时页，未入库）</title>
+<style>
+  /* 视觉预览专用宿主替身：composer 落在页面底部（还原真机底栏位置），
+     strip 插入其上方、panel 从 strip 向上展开（widget.css：bottom: calc(100% + 6px)）。 */
+  html, body { margin: 0; min-height: 100%; font-family: sans-serif; background: #1e1f24; color: #c9cdd6; }
+  body { display: flex; flex-direction: column; min-height: 100vh; }
+  .app-title { padding: 24px; font-size: 14px; opacity: 0.7; }
+  .spacer { margin-top: auto; } /* 把 composer 推到页底 */
+  .composer { margin: 12px auto 40px; width: 620px; max-width: 90vw; border: 1px solid #3a3d45;
+    border-radius: 10px; padding: 12px; background: #26272e; }
+  .composer [data-turn-status-bar] { margin-top: 8px; font-size: 11px; opacity: 0.6; }
+</style>
+</head>
+<body>
+  <div class="app-title">QUM 预览（临时页 · 参数：?collapsed=1 收面板 / &expand=session 展开手风琴 / &to=&lt;sel&gt; 滚动 / &sort=&lt;项&gt; 切排序）</div>
+
+  <div class="spacer"></div>
+  <!-- 假 composer：2026-10-21 起 widget 把 strip 挂到该卡片末尾（输入框底部）。
+       P3：兼任会话 pane 替身，sid 由脚本按 ?sid= 或首份 state 的锚定会话写入。 -->
+  <div class="composer" id="fake-composer" data-active="1" data-chat-composer="1">
+    <div>（假输入区）</div>
+    <div data-turn-status-bar="1">turn status bar</div>
+  </div>
+
+  <script type="module">
+    const q = new URLSearchParams(location.search);
+    // 面板默认展开（截图用）：localStorage 预置 collapsed=false；?collapsed=1 恢复收起态。
+    localStorage.setItem('qum.layout.v1', JSON.stringify({
+      miniSlots: ['tokens', 'credits', 'tps', 'turnsec'],
+      collapsed: q.get('collapsed') === '1',
+    }));
+
+    import { __QUM__ } from '/app/widget.js';
+    import '/app/modules.js';
+
+    // 带 token：先同步取回真实 /state 再 mount（渲染确定，后续自动交互命中真实数据行）；
+    // 无 token / 取数失败：回落 mock-state.json。
+    const token = q.get('token') || null;
+    const loadState = async () => {
+      if (token) {
+        try {
+          const r = await fetch('/state', { headers: { 'X-QM-Token': token } });
+          if (r.ok) return await r.json();
+        } catch { /* 回落 mock */ }
+      }
+      return await (await fetch('/harness/mock-state.json')).json();
+    };
+    const initial = await loadState();
+    // P3：假 pane 的会话身份必须在 mount 前落好（widget 首帧即解析活动会话）。
+    // ?sid= 可指定要看哪个会话；默认用首份 state 的锚定会话（≡ 全局数据，便于对照 P2 表现）。
+    document.getElementById('fake-composer').dataset.chatSessionId =
+      q.get('sid') || (initial.local && initial.local.session && initial.local.session.id) || '';
+    __QUM__.setState(initial);
+
+    __QUM__.mount(document.body, {
+      baseUrl: '',
+      token,
+      bootstrapCode: q.get('bootstrap'),
+    });
+
+    // 等待某选择器出现（mount 同步渲染完，但对动态节点仍轮询等待）
+    const until = (sel, fn, ms = 12000) => {
+      const t0 = Date.now();
+      const timer = setInterval(() => {
+        const el = document.querySelector(sel);
+        if (el) { clearInterval(timer); fn(el); }
+        else if (Date.now() - t0 > ms) clearInterval(timer);
+      }, 120);
+    };
+
+    if (q.get('expand') === 'session') { // 第 nth 条会话手风琴展开（?nth=N，默认 1）
+      const nth = Math.max(1, parseInt(q.get('nth') || '1', 10) || 1) - 1;
+      until('.qum-session-item', () => {
+        const items = document.querySelectorAll('.qum-session-item');
+        if (items[nth]) items[nth].click();
+      });
+    }
+    if (q.get('to')) until(q.get('to'), (el) => el.scrollIntoView({ block: 'start' }));
+    if (q.get('sort')) until('.qum-models-sort', (el) => {
+      el.value = q.get('sort'); // 命中白名单才落态；否则保持默认 '7日消耗'
+      el.dispatchEvent(new Event('change'));
+    });
+  </script>
+</body>
+</html>
