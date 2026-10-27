@@ -243,7 +243,7 @@ test('usage half：仅「近5小时」一行（与 full 首行同规：cr + 非�
 
 // ---------------------------------------------------------------- strip 迷你槽（v5 读 lastTurn）
 // P2 用户裁定（v5 两行式 → v6 单行四槽）：槽数据源全部换到 local.lastTurn——tokens 槽 = consumption.renderMini
-// （该轮计费输入 [≈]billedInput；tokens 口径用真实 input+cacheRead+cacheCreate；≈ 仅 billedSource
+// （该轮计费输入 [≈]billedInput；tokens 口径用真实提示输入总量（input 已含 cacheRead）；≈ 仅 billedSource
 // 非 runtime-config）；credits 槽 = consumption.renderMini（该轮 credits「N.N cr」）；turnsec 槽 =
 // speed.renderMini（该轮 turnSec 一位小数，秒为单位绝无 min）；tps 槽 = speed.renderMini（该轮
 // outTps 生成速度）。lastTurn 缺 → 各槽 '--' 占位（整条空态由 widget.renderStrip 承担）。
@@ -308,8 +308,10 @@ test('v7 session renderMini（会话簇）: tokens 万单位 [≈] + 命中% + �
   assert.equal(mini(noHit), '≈12.8万 tok · 23 轮 · 187 次', '无缓存字段 → 不显示命中段（不补 0%）');
   const tok = JSON.parse(JSON.stringify(mock));
   tok.local.billingMode = 'tokens';
-  tok.local.session = { ...tok.local.session, billingMode: 'tokens', input: 7000, cacheRead: 90000, cacheCreate: 1000 };
-  assert.equal(mini(tok), '9.8万 tok · 86.1% 命中 · 23 轮 · 187 次', 'tokens 口径用 input+cacheRead+cacheCreate（98,000）');
+  // 口径裁定（2026-10-27）：input_tokens 已含缓存命中（cacheRead ⊂ input），tokens 口径的
+  // 真实总量就是 input 自身，绝不再加 cacheRead/cacheCreate。
+  tok.local.session = { ...tok.local.session, billingMode: 'tokens', input: 98000, cacheRead: 90000, cacheCreate: 0 };
+  assert.equal(mini(tok), '9.8万 tok · 86.1% 命中 · 23 轮 · 187 次', 'tokens 口径用 input（已含缓存）98,000，不叠加');
   const noSess = { ...mock, local: { ...mock.local, session: undefined, active: undefined } };
   assert.equal(mini(noSess), '--');
 });
@@ -819,17 +821,19 @@ const tokState = () => {
   const st = JSON.parse(JSON.stringify(mock));
   const L = st.local;
   L.billingMode = 'tokens';
-  const w = { input: 7000, output: 500, cacheRead: 90000, cacheCreate: 1000, credits: 0, turns: 3, billedInput: 120000, billedInputSource: 'fallback200k', cacheHitRate: 0.918 };
+  // 真机口径（2026-10-27）：input 是 prompt 总量，cacheRead 是其中的缓存命中子集。
+  // 本夹具：prompt 98,000（命中 90,000 → 未命中 8,000），命中率 90,000/98,000 = 91.8%。
+  const w = { input: 98000, output: 500, cacheRead: 90000, cacheCreate: 0, credits: 0, turns: 3, billedInput: 120000, billedInputSource: 'fallback200k', cacheHitRate: 0.918 };
   L.window5h = { ...w }; L.week = { ...w }; L.today = { ...w };
   L.contextWindow = { value: 200000, source: 'fallback200k' };
-  L.session = { id: 'sess-byok', credits: 0, turns: 3, rateCpm30: 0, billedInput: 120000, avgTurnSec: 91, totalTurnSec: 262, model: 'qoder-custom-f4e/mimo-v2.6-flash', modelName: 'mimo-v2.6-flash', tps30: 66.7, billingMode: 'tokens', input: 7000, output: 500, outEst: 421, outEstThk: 30, outEstTxt: 351, outEstCall: 40, cacheRead: 90000, cacheCreate: 1000, outTps30: 55.8, rounds: 3, requests: 5, cacheHitRate: 0.918, firstTs: 1791793000000, lastTs: 1791793816142, tools: { calls: 6, errors: 0, byName: [{ name: 'Read', calls: 6, errors: 0 }] }, edits: { added: 10, removed: 2, files: 2 } }; // outEst：T16 正文估算（「输出」行换它，带 ~）
-  L.sessions = [{ id: 'sess-byok', model: 'qoder-custom-f4e/mimo-v2.6-flash', modelName: 'mimo-v2.6-flash', credits: 0, billedInput: 120000, billedSource: 'fallback200k', turns: 3, rounds: 3, requests: 5, lastTs: 1791793816142, avgTurnSec: 91, billingMode: 'tokens', input: 7000, output: 500, cacheRead: 90000, cacheCreate: 1000 }];
+  L.session = { id: 'sess-byok', credits: 0, turns: 3, rateCpm30: 0, billedInput: 120000, avgTurnSec: 91, totalTurnSec: 262, model: 'qoder-custom-f4e/mimo-v2.6-flash', modelName: 'mimo-v2.6-flash', tps30: 66.7, billingMode: 'tokens', input: 98000, output: 500, outEst: 421, outEstThk: 30, outEstTxt: 351, outEstCall: 40, cacheRead: 90000, cacheCreate: 0, outTps30: 55.8, rounds: 3, requests: 5, cacheHitRate: 0.918, firstTs: 1791793000000, lastTs: 1791793816142, tools: { calls: 6, errors: 0, byName: [{ name: 'Read', calls: 6, errors: 0 }] }, edits: { added: 10, removed: 2, files: 2 } }; // outEst：T16 正文估算（「输出」行换它，带 ~）
+  L.sessions = [{ id: 'sess-byok', model: 'qoder-custom-f4e/mimo-v2.6-flash', modelName: 'mimo-v2.6-flash', credits: 0, billedInput: 120000, billedSource: 'fallback200k', turns: 3, rounds: 3, requests: 5, lastTs: 1791793816142, avgTurnSec: 91, billingMode: 'tokens', input: 98000, output: 500, cacheRead: 90000, cacheCreate: 0 }];
   // T9：strip v5 迷你槽读 lastTurn（BYOK 真机形态——轮内真实 token、credits null）
   L.lastTurn = {
     sessionId: 'S-tk', promptTs: 0, endTs: 45600, turnSec: 45.6,
     model: 'qoder-custom-x/mimo-v2.6-flash', modelName: 'Mimo-V2.6',
     billingMode: 'tokens', credits: null,
-    input: 7000, output: 500, cacheRead: 96000, cacheCreate: 1000,
+    input: 104000, output: 500, cacheRead: 96000, cacheCreate: 0,
     billedInput: null, billedSource: null, outTps: 45.6,
   };
   return st;
@@ -843,9 +847,9 @@ const linesOf = async (id, state, size) => {
 test('tokens 口径：usage 用量节奏改真实 in/out（无 cr、无 ≈ 估算段）', async () => {
   const st = tokState();
   // P2（修订②）：usage half 改读 window5h（今日数字归「token 消耗」，不再重复）
-  assert.deepEqual(await linesOf('usage', st, 'half'), ['近5小时7.0k in / 500 out']);
+  assert.deepEqual(await linesOf('usage', st, 'half'), ['近5小时98.0k in / 500 out']);
   assert.deepEqual(await linesOf('usage', st, 'full'),
-    ['近5小时7.0k in / 500 out', '本周7.0k in / 500 out']);
+    ['近5小时98.0k in / 500 out', '本周98.0k in / 500 out']);
   // 回归网：credits 口径（mock 默认）half 同样出「近5小时」行
   assert.match((await linesOf('usage', mock, 'half'))[0], /^近5小时35 cr · .*in \/ .*out/, 'credits 口径 half 同规出 cr + in/out');
 });
@@ -855,7 +859,7 @@ test('tokens 口径：session 本会话 half/full 改真实 token 三明细 + �
   assert.deepEqual(await linesOf('session', st, 'half'), ['本会98.0k tok']);
   assert.deepEqual(await linesOf('session', st, 'full'), [
     '本会话98.0k tok · 3 轮 · 5 次', '生成速度~55.8 tps',
-    '输入未命中7.0k tok', '缓存命中90.0k tok', '输出~421 tok', '会话sess-byo', // 输出行：T16 正文估算（~），旧 state 无 outEst 回落真实 output
+    '输入未命中8.0k tok', '缓存命中90.0k tok', '输出~421 tok', '会话sess-byo', // 未命中 = input − cacheRead（缓存是 input 的子集）
     '模型mimo-v2.6-flash (byok)', // T8：mock 目录新增 mimo-v2.6-flash（byok:true）→ 后缀标注
   ]);
   assert.match((await linesOf('session', mock, 'half'))[0], /cr$/);
@@ -869,8 +873,8 @@ test('T16 真值优先：outTok/outExact/outTps30Exact=true 时输出与速度�
   s.outTps30Exact = true;
   s.byModel = [{
     model: 'qoder-custom-f4e/mimo-v2.6-flash', modelName: 'mimo-v2.6-flash', billingMode: 'tokens',
-    credits: null, creditsBillable: null, creditsFree: null, input: 7000, output: 500,
-    cacheRead: 90000, cacheCreate: 1000, billedInput: null, billedSource: null,
+    credits: null, creditsBillable: null, creditsFree: null, input: 104000, output: 500,
+    cacheRead: 96000, cacheCreate: 0, billedInput: null, billedSource: null,
     turns: 1, outTps: 12.3, outTpsExact: true, avgTurnSec: 10,
   }];
   const rows = await linesOf('session', st, 'full');
@@ -890,15 +894,15 @@ test('T16 真值优先：outTok/outExact/outTps30Exact=true 时输出与速度�
 
 test('tokens 口径：consumption 今日行去 cr、tokens 迷你槽读 lastTurn 真实计费输入总量（无 ≈）、credits 槽 -- cr；session 簇切真实 token', async () => {
   const st = tokState();
-  assert.deepEqual(await linesOf('consumption', st, 'half'), ['今日7.0k in / 500 out']);
+  assert.deepEqual(await linesOf('consumption', st, 'half'), ['今日98.0k in / 500 out']);
   assert.deepEqual(await linesOf('consumption', st, 'full'),
-    ['5h7.0k in / 500 out', '周7.0k in / 500 out', '今日7.0k in / 500 out']);
+    ['5h98.0k in / 500 out', '周98.0k in / 500 out', '今日98.0k in / 500 out']);
   const { getModules } = await import('../app/widget.js');
   const def = getModules().find((m) => m.id === 'consumption');
-  // v7：tokens 槽仍是末轮真实总量（input+cacheRead+cacheCreate = 104,000）；credits 槽在 tokens 口径不适用
+  // v7：tokens 槽仍是末轮真实总量（input 已含缓存 = 104,000）；credits 槽在 tokens 口径不适用
   assert.equal(textOf(def.renderMini({ size: 'mini', slot: 'tokens', state: syncActive(st), fmt: {} })), '104,000 tok');
   assert.equal(textOf(def.renderMini({ size: 'mini', slot: 'credits', state: syncActive(st), fmt: {} })), '-- cr');
-  // v7：session 会话簇在 tokens 口径用真实总量（7000+90000+1000 = 98,000 → 9.8万），无 ≈
+  // v7：session 会话簇在 tokens 口径用真实总量（input 已含缓存 = 98,000 → 9.8万），无 ≈
   const sdef = getModules().find((m) => m.id === 'session');
   assert.equal(textOf(sdef.renderMini({ size: 'mini', slot: 'session', state: syncActive(st), fmt: {} })),
     '9.8万 tok · 91.8% 命中 · 3 轮 · 5 次');
@@ -1008,11 +1012,11 @@ test('models 按模型消耗（修订④）：默认 7 日序卡片五列值 + b
     ['DeepSeek-Flash (byok)', 'Qwen3.8-27B', 'GLM-5.3', 'Kimi K3', 'Mimo-V2.6 (byok)']);
   // 五列值（照图：今日/近7日/Tokens/时延/占比；Mimo 无 cr 上报 → -）
   assert.deepEqual(cards.map((c) => findAll(c, 'qum-models-value').map(textOf)), [
-    ['29 cr', '912 cr', '58.9M', '63s/回合', '83%'],
+    ['29 cr', '912 cr', '60.4M', '63s/回合', '83%'],
     ['6 cr', '128 cr', '8.6M', '71s/回合', '12%'],
     ['3 cr', '43 cr', '3.9M', '88s/回合', '4%'],
-    ['1 cr', '15 cr', '3.5M', '74s/回合', '1%'],
-    ['-', '-', '1.2M', '41s/回合', '-'],
+    ['1 cr', '15 cr', '3.4M', '74s/回合', '1%'],
+    ['-', '-', '1.3M', '41s/回合', '-'],
   ]);
   // 左缘彩条：按显示位次循环（第 5 行回绕蓝）；条色同左缘
   assert.deepEqual(cards.map((c) => c.style.borderLeft),
@@ -1091,7 +1095,7 @@ test('models 排序切换（修订④）：下拉 change 就地重排（不重�
   assert.deepEqual(names(), ['DeepSeek-Flash (byok)', 'Qwen3.8-27B', 'GLM-5.3', 'Kimi K3', 'Mimo-V2.6 (byok)']);
 });
 
-test('models 缓存命中徽标（2026-10-22 用户裁定）：仅 cacheRead>0 的模型渲染；率=cacheRead/(input+cacheRead+cacheCreate)；无命中不出节点也不补 0%', async () => {
+test('models 缓存命中徽标（2026-10-22 用户裁定，2026-10-27 口径修正）：仅 cacheRead>0 的模型渲染；率=cacheRead/input（cacheRead 是 input 的子集，不再叠加）；无命中不出节点也不补 0%', async () => {
   await import('../app/modules.js'); // 自注册（单用例跑 --test-name-pattern 时也成立）
   const { getModules } = await import('../app/widget.js');
   const def = getModules().find((m) => m.id === 'models');
@@ -1103,10 +1107,10 @@ test('models 缓存命中徽标（2026-10-22 用户裁定）：仅 cacheRead>0 �
     turns: 1, outTps: 10, avgTurnSec: 5,
   });
   const rows = [
-    row('m-a', '缓存 90', 9000, 90000, 1000), // 90000 / 100000
+    row('m-a', '缓存 90', 100000, 90000, 0), // 90000 / 100000
     row('m-b', '无缓存', 0, 0, 0),            // 分母 0
     row('m-c', '仅输入', 12345, 0, 0),        // 有分母但无缓存命中
-    row('m-d', '缓存 25', 30, 10, 0),         // 10 / 40（分母含 cacheCreate 时为 25%）
+    row('m-d', '缓存 25', 40, 10, 0),         // 10 / 40
   ];
   const st = { ...mock, local: { ...mock.local, byModelWindow: { windowStart: null, todayStart: null, rows } } };
   const el = def.render({ size: 'full', state: syncActive(st), fmt: {} });
@@ -1116,7 +1120,7 @@ test('models 缓存命中徽标（2026-10-22 用户裁定）：仅 cacheRead>0 �
   assert.equal(chipOf('缓存 90').length, 1, '有缓存读取 → 渲染一个徽标');
   assert.equal(textOf(chipOf('缓存 90')[0]), '缓存 90%');
   assert.equal(chipOf('缓存 25').length, 1);
-  assert.equal(textOf(chipOf('缓存 25')[0]), '缓存 25%', '分母含 cacheCreate');
+  assert.equal(textOf(chipOf('缓存 25')[0]), '缓存 25%', '率 = cacheRead / input');
   assert.equal(chipOf('无缓存').length, 0, 'token 全 0 → 不渲染徽标');
   assert.equal(chipOf('仅输入').length, 0, '有输入但 cacheRead=0 → 没有命中可报，不渲染');
   // 徽标与模型名同一行（head），不是新增的第六列

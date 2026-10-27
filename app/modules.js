@@ -354,11 +354,29 @@ const activeLtTokensMode = (state, lt) => {
   return activeMode(state);
 };
 
-/** 真实计费输入总量（BYOK 本地真值，非 billedInput 估算）：input + cacheRead + cacheCreate。 */
-function realPrompt(o) {
+/**
+ * 提示输入总量。Qoder 的 usage.input_tokens 已含缓存读取；仅当旧/异构记录出现 input < cacheRead
+ * 时，才按未命中+读取+写入还原（与 daemon promptTotalOf 同规）。
+ */
+function promptTotalOf(o) {
   if (!o || typeof o !== 'object') return null;
   const n = (v) => (isNum(v) ? v : 0);
-  return n(o.input) + n(o.cacheRead) + n(o.cacheCreate);
+  const input = n(o.input);
+  const cacheRead = n(o.cacheRead);
+  return input >= cacheRead ? input : input + cacheRead + n(o.cacheCreate);
+}
+
+/** 真实提示输入总量（BYOK 本地真值，非 billedInput 估算）。 */
+function realPrompt(o) {
+  if (!o || typeof o !== 'object') return null;
+  return promptTotalOf(o);
+}
+
+/** 未命中输入 = 提示输入总量 − 缓存读取（不低于 0）。 */
+function uncachedInput(o) {
+  if (!o || typeof o !== 'object') return null;
+  const n = (v) => (isNum(v) ? v : 0);
+  return Math.max(0, promptTotalOf(o) - n(o.cacheRead));
 }
 
 /** token 口径的窗口行文本：`N in / M out`（真实值，fmtK 风格与 credits 口径的 in/out 段一致）。 */
@@ -430,8 +448,8 @@ const session = {
   defaultSize: 'full',
   // v7（2026-10-26 用户裁定：对齐客户端原生底栏）：session 重新拥有 strip 迷你槽，形态是
   // 「会话簇」——[≈]N万 tok · [N% 命中] · N 轮 · N 次（轮=rounds，次=requests）。
-  // tokens 口径（BYOK）用 input+cacheRead+cacheCreate 真实总量且无 ≈；credits 口径用 billedInput
-  //（≈ 仅 contextWindow 非 runtime-config）。命中率缺失 → 整段省略（不补 0%）。无会话 → '--'。
+  // tokens 口径（BYOK）用提示输入总量（input 已含 cacheRead）真实值且无 ≈；credits 口径用
+  // billedInput（≈ 仅 contextWindow 非 runtime-config）。命中率缺失 → 整段省略（不补 0%）。无会话 → '--'。
   slotIds: ['session'],
   renderMini(ctx) {
     const f = fmtOf(ctx);
@@ -480,7 +498,7 @@ const session = {
       // 无真值才估算）；速度行 = T16 生成速度 outTps30（最佳输出 ÷ 实测秒，估算才带 ~）。
       box.append(line('本会话', `${f.fmtTokens(realPrompt(s))} tok · ${scale}`));
       box.append(line('生成速度', tpsText(f, isNum(s.outTps30) ? s.outTps30 : null, s.outTps30Exact === true)));
-      box.append(line('输入未命中', `${f.fmtTokens(s.input)} tok`));
+      box.append(line('输入未命中', `${f.fmtTokens(uncachedInput(s))} tok`));
       box.append(line('缓存命中', `${f.fmtTokens(s.cacheRead)} tok`));
       // Output 最佳值：真值优先（usage.output_tokens > 0），无真值才带 ~ 估算；旧 state 回落 outEst。
       const outBest = isNum(s.outTok) ? s.outTok : isNum(s.outEst) ? s.outEst : null;
@@ -655,24 +673,25 @@ function modelWindowRows(state) {
 /** credits 口径数值：有限数取自身，其余（null/undefined/NaN/字符串）→ null（缺失不按 0 计入）。 */
 function creditNum(v) { return isNum(v) ? v : null; }
 
-/** 行 Token 总量（近7日和：input+output+cacheRead+cacheCreate；两口径同义的真实量）。 */
+/** 行 Token 总量（近7日和：提示输入总量 + 输出；cacheRead 已含在 input 内，不重复计）。 */
 function tokenSum(r) {
   const o = r && typeof r === 'object' ? r : {};
   const n = (v) => (isNum(v) ? v : 0);
-  return n(o.input) + n(o.output) + n(o.cacheRead) + n(o.cacheCreate);
+  return promptTotalOf(o) + n(o.output);
 }
 
 /**
  * 缓存命中率（2026-10-22 用户裁定）：只在确有缓存读取（cacheRead > 0）的模型上出徽标；
  * 无命中可报（credits 口径 token 全 0 / 上游未上报）→ null，不渲染、不补 0%。
- * 率 = cacheRead / (input + cacheRead + cacheCreate)；cacheRead>0 已保证分母>0。
+ * 率 = cacheRead / 提示输入总量；Qoder 的 input 已含 cacheRead，不能再次相加。
  */
 function cacheRateOf(r) {
   const o = r && typeof r === 'object' ? r : {};
   const n = (v) => (isNum(v) ? v : 0);
   const hit = n(o.cacheRead);
   if (hit <= 0) return null;
-  return hit / (n(o.input) + hit + n(o.cacheCreate));
+  const total = promptTotalOf(o);
+  return total > 0 ? hit / total : null;
 }
 
 /** 排序主键取值（缺失 → null 垫底）。'占比' 与 '7日消耗' 同键（同分母 → 同序）。 */
@@ -738,7 +757,7 @@ function modelsCard(f, state, r, i, max, sum) {
   const rate = cacheRateOf(r);
   if (rate !== null) {
     const chip = h('span', 'qum-models-cache', `缓存 ${f.fmtPct(rate)}`);
-    chip.title = '缓存命中率 = 缓存读取 / (输入 + 缓存读取 + 缓存写入)';
+    chip.title = '缓存命中率 = 缓存读取 / 输入总量（输入已含缓存读取）';
     head.append(chip);
   }
   card.append(head);
@@ -834,8 +853,8 @@ const consumption = {
   defaultSize: 'half',
   slotIds: ['tokens', 'credits'],
   // Strip layout v7（2026-10-26 用户裁定）：tokens 槽仍是「最新一轮计费输入」（credits 口径
-  // [≈]billedInput，≈ 仅 source 非 runtime-config；tokens 口径 = 该轮真实总量 input+cacheRead+
-  // cacheCreate，无 ≈）；credits 槽改为「会话累计实扣 credits」（active.session.creditsBillable，两位小数
+  // [≈]billedInput，≈ 仅 source 非 runtime-config；tokens 口径 = 该轮提示输入总量（input 已含
+  // cacheRead），无 ≈）；credits 槽改为「会话累计实扣 credits」（active.session.creditsBillable，两位小数
   // 裁尾零）——原生底栏的 credits 是会话级口径，不是末轮。tokens 口径下 credits 不存在 → '-- cr'。
   // 口径按该轮 billingMode（lt.billingMode ?? 全局）。lastTurn 缺 → tokens 槽 '-- tok' 占位
   // （整条空态「暂无回合数据」由 widget.renderStrip 承担），绝不出「≈--」噪声。

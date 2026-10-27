@@ -68,19 +68,20 @@ test('T1 parseJsonlLine: assistant rec 携带 message.model（非空 string 才�
 
 test('window5h filters and computes', () => {
   const now = Date.UTC(2026, 9, 10, 12, 0, 0);
+  // 口径裁定（2026-10-27，真机 + 官方 inspector v2.7.4 自证）：usage.input_tokens 是
+  // prompt 总量（OpenAI prompt_tokens 式），cacheRead 是其中的缓存命中子集，**不再叠加**；
+  // 命中率 = cacheRead / input（inspector cachedShare，实测全局 ~91.5%）。
   const recs = [
-    { ts: now - 4 * H, uuid: 'a', input: 1000, output: 100, cacheRead: 9000, cacheCreate: 0, sub: false },
+    { ts: now - 4 * H, uuid: 'a', input: 10000, output: 100, cacheRead: 9000, cacheCreate: 0, sub: false },
     { ts: now - 6 * H, uuid: 'b', input: 7000, output: 700, cacheRead: 0, cacheCreate: 0, sub: false }, // 窗外
-    { ts: now - 2 * H, uuid: 'c', input: 500, output: 50, cacheRead: 4500, cacheCreate: 0, sub: true },
+    { ts: now - 2 * H, uuid: 'c', input: 5000, output: 50, cacheRead: 4500, cacheCreate: 0, sub: true },
   ];
   const a = aggregate(recs, now);
-  assert.equal(a.window5h.input, 1500);
+  assert.equal(a.window5h.input, 15000);
   assert.equal(a.window5h.output, 150);
-  // 修正：brief 片段写 9000/(9000+1500) 是漏算了 sub 记录的 cacheRead 4500；
-  // 按接口定义 formula cacheRead/(cacheRead+input+cacheCreate) 应为 (9000+4500)/(13500+1500)
-  assert.equal(a.window5h.cacheHitRate, 13500 / (13500 + 1500));
+  assert.equal(a.window5h.cacheHitRate, (9000 + 4500) / (10000 + 5000));
   assert.equal(a.window5h.turns, 2);
-  assert.equal(a.window5h.byAgent.main.input, 1000);
+  assert.equal(a.window5h.byAgent.main.input, 10000);
   assert.equal(a.window5h.byAgent.sub.output, 50);
   // Controller ruling: paceRatio = 数据新鲜度 = (lastRecordTs - windowStart)/windowDuration
   // lastTs = now-2h, start = now-5h → 3h/5h = 0.6（覆盖 brief Step-1 的区间断言）
@@ -158,7 +159,7 @@ test('dailyRows groups by local date', () => {
   assert.equal(r9.cacheHitRate, 0); // denom=10≠0, cacheRead=0
   assert.equal(r9.speedTps, 1); // 单条簇 1s 下限, output 1
   assert.equal(r10.sub.input, 20);
-  assert.equal(r10.cacheHitRate, 5 / (5 + 20));
+  assert.equal(r10.cacheHitRate, 5 / 20); // cacheRead ⊂ input（不叠加分母）
 });
 
 // ---------------------------------------------------------------- T12 credits 校准
@@ -654,7 +655,8 @@ test('sessionStats: tokens 口径会话 → 真实 token 四元组 + billingMode
   assert.equal(s.cacheRead, 90000);
   assert.equal(s.cacheCreate, 1000);
   assert.equal(s.credits, 0, 'BYOK 无 credits → 0（不是 null：会话存在）');
-  // 真实输入吞吐 = Σ(input+cacheRead+cacheCreate 窗内)/1800 = (7000+90000+1000)/1800
+  // 真实输入吞吐 = Σ提示输入总量/1800；此夹具为旧/异构 input<cacheRead，
+  // 按三项还原 (7000+90000+1000)/1800（真机 input 已含 cacheRead，只计 input）
   assert.equal(s.tps30Tokens, Math.round((98000 / 1800) * 10) / 10);
   assert.equal(s.tps30, Math.round((s.billedInput / 1800) * 10) / 10, 'billed 口径 tps30 保留（credits 口径用）');
 });
@@ -1027,7 +1029,7 @@ test('原生样式数据面 sessionStatsFor: rounds/requests/cacheHitRate/时间
   assert.equal(s.rounds, 1, 'rounds = buildTurns 轮数（1 个 prompt → 1 轮），不是 usage 行数');
   assert.equal(s.turns, 3, 'turns 旧字段语义不变（usage 行数）');
   assert.equal(s.requests, 2, 'r1 两行去重为 1 + 缺 rid 记录各计 1');
-  assert.equal(s.cacheHitRate, 900 / (160 + 900 + 100), 'cacheRead /(input+cacheRead+cacheCreate)；分母非 0');
+  assert.equal(s.cacheHitRate, 900 / (160 + 900 + 100), '旧/异构 input<cacheRead → 三项还原后 cacheRead/总量；真机 input 已含 cacheRead');
   assert.equal(s.firstTs, T(2));
   assert.equal(s.lastTs, T(6));
   assert.deepEqual([s.outEstThk, s.outEstTxt, s.outEstCall], [25, 49, 20], '三段各自取整；25+49+20 = outEst 94');

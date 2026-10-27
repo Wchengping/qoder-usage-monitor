@@ -265,6 +265,17 @@ function outExactOf(arr) {
   return true;
 }
 
+/**
+ * 提示输入总量。Qoder 的 usage.input_tokens 已含缓存读取（真机 ratio×contextWindow 与 input
+ * 逐条吻合）；仅当旧/异构记录出现 input < cacheRead 时，才按未命中+读取+写入还原。
+ */
+function promptTotalOf(r) {
+  const input = (r && r.input) || 0;
+  const cacheRead = (r && r.cacheRead) || 0;
+  const cacheCreate = (r && r.cacheCreate) || 0;
+  return input >= cacheRead ? input : input + cacheRead + cacheCreate;
+}
+
 /** 记录是否携带 qodercli.log 配对区间 [mt0, mt1]（T16 实测纯模型秒的最小单位）。 */
 function isPaired(r) {
   return Number.isFinite(r.mt0) && Number.isFinite(r.mt1);
@@ -349,19 +360,21 @@ function toolSecMs(toolSpans, sessionId, lo, hi) {
   return mergeIntervalMs(ivs, lo, hi);
 }
 
-/** AgentAgg：对已按 ts 排序的记录做聚合；cacheHitRate 分母 0 → null；credits 三口径（名义/实扣/免费，round2）。 */
+/** AgentAgg：对已按 ts 排序的记录做聚合；cacheHitRate = cacheRead / 提示输入总量；分母 0 → null；credits 三口径（名义/实扣/免费，round2）。 */
 function aggOf(sorted) {
   let input = 0;
   let output = 0;
   let cacheRead = 0;
   let cacheCreate = 0;
+  let promptTotal = 0;
   for (const r of sorted) {
     input += r.input;
     output += r.output;
     cacheRead += r.cacheRead;
     cacheCreate += r.cacheCreate;
+    promptTotal += promptTotalOf(r);
   }
-  const denom = cacheRead + input + cacheCreate;
+  const denom = promptTotal;
   const cf = creditFactsOf(sorted);
   return {
     input,
@@ -552,7 +565,8 @@ export function dailyRows(records, tz) {
  *  - billingMode：本会话口径（'credits'|'tokens'|null，取最新一条可判定记录；中途换模型跟随最新）；
  *  - input/output/cacheRead/cacheCreate：本会话真实 token 合计（内置模型多数行为 0，
  *    免费模型/BYOK 行有值）；
- *  - tps30Tokens：真实 token 输入吞吐 Σ(input+cacheRead+cacheCreate 窗内)/1800 round1；
+ *  - tps30Tokens：真实 token 输入吞吐 Σ(提示输入总量 窗内)/1800 round1；Qoder 的
+ *    input_tokens 已含 cacheRead，故只计 input（旧/异构 input<cacheRead 记录才三项求和）。
  *    窗内无记录 → null，有记录但 token 全零 → 0。tokens 口径呈现须用它而非 tps30（估算）。
  *  - outTps30：生成速度（tok/s，用户裁定 T16 口径）——近30分钟窗内
  *    **最佳 Output ÷ 实测纯模型秒**（分子：usage.output_tokens 真值优先，缺失才用 est.mjs
@@ -565,7 +579,7 @@ export function dailyRows(records, tz) {
  *    有真值的会话呈现不带 ~，估算/混合会话带 ~。
  *  - 原生样式数据面（2026-10-26，第 5 参 toolEvents 为 server readRecords 的 [{sid,ts,name,err,add,del,file}]）：
  *    rounds（buildTurns 轮数）、requests（request_id 去重；缺 rid 各行计 1）、
- *    cacheHitRate（cacheRead/(input+cacheRead+cacheCreate)；分母 0 → null）、
+ *    cacheHitRate（cacheRead/提示输入总量；input 已含缓存读取，分母 0 → null）、
  *    firstTs/lastTs（本会话 usage 时间范围）、outEstThk/Txt/Call（三段估算，各自取整）、
  *    tools {calls,errors,byName} 与 edits {added,removed,files}|null（见 toolStatsOf）。
  *    toolEvents 缺省 → 空工具形状（旧调用面/测试兼容）。
@@ -584,6 +598,7 @@ export function sessionStatsFor(records, now, ctxWindows, sessionId, toolEvents)
   let output = 0;
   let cacheRead = 0;
   let cacheCreate = 0;
+  let promptTotal = 0;
   let winTokens = 0;
   let requests = 0;        // 请求数：request_id 去重；缺 rid 的记录各计 1（诚实计数）
   let estThk = 0;
@@ -596,6 +611,7 @@ export function sessionStatsFor(records, now, ctxWindows, sessionId, toolEvents)
     output += r.output;
     cacheRead += r.cacheRead;
     cacheCreate += r.cacheCreate;
+    promptTotal += promptTotalOf(r);
     if (r.rid) {
       if (!rids.has(r.rid)) { rids.add(r.rid); requests++; }
     } else requests++;
@@ -604,7 +620,7 @@ export function sessionStatsFor(records, now, ctxWindows, sessionId, toolEvents)
     if (typeof r.outEstCall === 'number' && Number.isFinite(r.outEstCall)) estCall += r.outEstCall;
     if (r.ts > rateStart) {
       inWindow.push(r);
-      winTokens += r.input + r.cacheRead + r.cacheCreate; // 真实计费输入总量（含缓存读写）
+      winTokens += promptTotalOf(r); // 真实提示输入总量（缓存读取已含在 input 内，只计一次）
     }
   }
   const cf = creditFactsOf(mine);
@@ -634,7 +650,7 @@ export function sessionStatsFor(records, now, ctxWindows, sessionId, toolEvents)
   const byModel = byModelOf(mine, turns, ctxWindows);
   // 工具/编辑统计（原生样式数据面）：toolEvents 缺省 → 空形状（旧调用面兼容）。
   const tools = toolStatsOf(toolEvents, sessionId);
-  const cacheDenom = cacheRead + input + cacheCreate;
+  const cacheDenom = promptTotal;
   return {
     id: sessionId,
     // 会话级契约（沿用旧消费面）：会话存在但全无 credits（BYOK）→ 0，不是 null。
@@ -669,7 +685,7 @@ export function sessionStatsFor(records, now, ctxWindows, sessionId, toolEvents)
     // ---- 原生样式（2026-10-26）：底栏会话簇 + 悬停摘要卡 ----
     rounds: turns.length,                                  // 轮数（真实轮段；turns 仍是 usage 行数，兼容旧消费面）
     requests,                                              // 请求数（rid 去重；缺 rid 各行计 1）
-    cacheHitRate: cacheDenom === 0 ? null : cacheRead / cacheDenom, // 真实缓存命中率；无缓存 token → null（隐藏，不补 0%）
+    cacheHitRate: cacheDenom === 0 ? null : cacheRead / cacheDenom, // 真实缓存命中率（input 已含 cacheRead）；无 token → null（隐藏，不补 0%）
     firstTs: mine[0].ts,
     lastTs: mine[mine.length - 1].ts,
     tools: { calls: tools.calls, errors: tools.errors, byName: tools.byName },

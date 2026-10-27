@@ -829,11 +829,16 @@ function activeSessionOf() {
   return s && typeof s === 'object' && !Array.isArray(s) ? s : null;
 }
 
-/** 真实计费输入总量（BYOK 本地真值）：input + cacheRead + cacheCreate。 */
+/**
+ * 提示输入总量（BYOK 本地真值）。Qoder 的 input 已含 cacheRead；仅旧/异构记录
+ * input < cacheRead 时按三项求和还原（与 daemon promptTotalOf 同规）。
+ */
 function realPromptOf(o) {
   if (!o || typeof o !== 'object') return null;
   const n = (v) => (isFiniteNum(v) ? v : 0);
-  return n(o.input) + n(o.cacheRead) + n(o.cacheCreate);
+  const input = n(o.input);
+  const cacheRead = n(o.cacheRead);
+  return input >= cacheRead ? input : input + cacheRead + n(o.cacheCreate);
 }
 
 function hoverRow(doc, key, val) {
