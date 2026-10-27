@@ -1,8 +1,12 @@
 // daemon/est.mjs
 // Qoder Usage Monitor — 正文估算 Output + 实测纯模型秒（纯函数模块：零 IO，可单测）。
 //
-// 口径来源（用户裁定，移植自 credits-overlay.py）：
-//   est_tokens(s) = CJK 字数 × 1.3 + 其余字符数 ÷ 4                     （credits-overlay.py:571）
+// 口径来源（用户裁定，移植自 credits-overlay.py；2026-10-27 对原生显示校准）：
+//   est_tokens(s) = CJK 字数 × 1.3 + 其余字符数 ÷ 3.0
+//   原式 ÷4（credits-overlay.py:571）在内置模型「usage 全 0、只能估」的轮次上，相对 Qoder 原生
+//   状态栏「Out」系统性低 26~38%（两类轮次各测一次）。按两个样本回放取折中：÷3.0 时标定轮
+//   −6.3%（168.7 vs 180 TPS）、验证轮 +6.7%（160 vs 150 TPS）；÷2.8 只贴合单一轮（另一轮 +14%）。
+//   样本为 thinking/工具 JSON 密集轮，中文为主的轮次可能反向偏；BYOK 真值对照会从 −14% 变成约 +15%。
 //   Output = Σ est_tokens(block_text(b))，对每个 assistant 的每个内容块   （:983-995）
 //     · block_text：thinking → thinking；text → text；tool_use → JSON.stringify(input)；
 //       其余块类型不计。三类拆分（Thk/Txt/Call）按块类型累加，本模块只提供合计与分块入口。
@@ -12,7 +16,8 @@
 //   <synthetic> 伪条目整条跳过（parseJsonlLine 层），不贡献任何估算。
 //
 // **这是估算，不是 tokenizer，也不是供应商的 usage.output_tokens**（真机内置模型 token 字段
-// 恒 0，BYOK 真值对照实测 185 条消息中位偏差 −14%、p10/p90 = −33%/+7%）→ 呈现层一律带 ~。
+// 恒 0；除以 4 的旧式对 BYOK 185 条真值偏差中位 −14%、p10/p90 = −33%/+7%，现式 ÷3.0 预期
+// +15% 左右——取舍是优先对齐内置模型下客户端原生显示）→ 呈现层一律带 ~。
 // 它只覆盖转录里有的内容：系统提示词/工具定义不在其中（那些属输入侧）；无 usage 行的孤立
 // 消息（中断写入/嵌套父链回放，真机占 est ≈4%）不产记录，同样不计。
 //
@@ -20,6 +25,10 @@
 //   按 request_id 成对的区间，窗口/轮内**区间合并**（并发不重复计时）后求和；轮级再夹到该轮
 //   墙钟。无日志的轮兜底 = 轮端到端 − 已配对合并的工具区间（tool_use 记录 ts → tool_result
 //   记录 ts）。日志缺失的窗口/模型组不做兜底（Rate 口径 = Σ实测模型秒）。
+
+/** CJK 字符的 token 权重 / 非 CJK 字符的每 token 字符数（2026-10-27 校准，见文件头）。 */
+const CJK_WEIGHT = 1.3;
+const OTHER_CHARS_PER_TOKEN = 3.0;
 
 /** 单串估算 token 数（float；调用方按呈现需要 round）。非字符串/空串 → 0。 */
 export function estTokens(s) {
@@ -35,7 +44,7 @@ export function estTokens(s) {
       cjk++;
     }
   }
-  return cjk * 1.3 + (s.length - cjk) / 4;
+  return cjk * CJK_WEIGHT + (s.length - cjk) / OTHER_CHARS_PER_TOKEN;
 }
 
 /**

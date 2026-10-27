@@ -18,7 +18,7 @@ const PROJ = path.join(TMP,'projects','ws'); fs.mkdirSync(PROJ,{recursive:true})
   for (const o of lines) o.timestamp = new Date(now-(anchor-Date.parse(o.timestamp))).toISOString();
   // T16：assistant 行补 message.id / 正文块 / request_id（估算分子 + qodercli.log 配对键）。
   // f1 另写一条同 message.id 的**无 usage 行**（正文 'abcd'）→ e2e 验证整消息估算归并：
-  // 该行不产记录，est 6.2 = 5.2(你好世界) + 1(abcd) 全部落到 f1.outEst。f2/f3 不给 message.id
+  // 该行不产记录，est 6.53 = 5.2(你好世界) + 4÷3(abcd) 全部落到 f1.outEst。f2/f3 不给 message.id
   // → 走"行内 est"路径，两条路径同 e2e 覆盖。
   const asst = lines.filter((o) => o.type === 'assistant'); // [f1 qfmodel, f2 mimo, f3 mimo]
   const withT16 = (o, { mid, rid, content }) => {
@@ -27,8 +27,8 @@ const PROJ = path.join(TMP,'projects','ws'); fs.mkdirSync(PROJ,{recursive:true})
     o.message.usage.request_id = rid;
   };
   withT16(asst[0], { mid: 'msg-f1', rid: 'rid-f1', content: [{ type: 'text', text: '你好世界' }] }); // est 5.2
-  withT16(asst[1], { rid: 'rid-f2', content: [{ type: 'text', text: 'abcdefgh' }] });                // est 2
-  withT16(asst[2], { rid: 'rid-f3', content: [{ type: 'thinking', thinking: '12345678' }] });        // est 2
+  withT16(asst[1], { rid: 'rid-f2', content: [{ type: 'text', text: 'abcdefgh' }] });                // est 8÷3
+  withT16(asst[2], { rid: 'rid-f3', content: [{ type: 'thinking', thinking: '12345678' }] });        // est 8÷3
   lines.splice(1, 0, {
     type: 'assistant', uuid: 'f1b', sessionId: 'sess-cur', timestamp: asst[0].timestamp, isSidechain: false,
     message: { role: 'assistant', model: 'qfmodel', id: 'msg-f1', content: [{ type: 'text', text: 'abcd' }] },
@@ -58,8 +58,8 @@ const PROJ = path.join(TMP,'projects','ws'); fs.mkdirSync(PROJ,{recursive:true})
   );
   fs.writeFileSync(path.join(PROJ,'s1.jsonl'), lines.map((o)=>JSON.stringify(o)).join('\n')+'\n');
   // T16 计时日志（qodercli.log 形态）：logsRoot = dirname(QUM_PROJECTS_DIR)/logs = TMP/projects/logs。
-  // f1 区间落在其轮窗 [u1, f1] 内（f1−5s → f1−1.9s，3.1s）→ 6.2 ÷ 3.1 = 2 tps；
-  // f2/f3 各 1s 且相隔 6h（不重叠）→ mimo 组 (2+2)÷(1+1) = 2 tps。
+  // f1 区间落在其轮窗 [u1, f1] 内（f1−5s → f1−1.9s，3.1s）→ 6.53 ÷ 3.1 = 2.1 tps；
+  // f2/f3 各 1s 且相隔 6h（不重叠）→ mimo 组 (8÷3 + 8÷3)÷(1+1) = 2.7 tps。
   const iso = (ms) => new Date(ms).toISOString().replace('Z', '+00:00');
   const ev = (kind, rid, ms, model, sid) =>
     `${iso(ms)} INFO  [session=${sid} turn=${rid} loop=${rid}:1 request=${rid}] model.${kind} request_index=1 request_id="${rid}" model="${model}" stop_reason="end_turn"\n`;
@@ -148,16 +148,16 @@ test('bootstrap exchanges for token, state aggregates fixture', async ()=>{
   // 活跃会话为 f1（sess-cur，重打戳后即 now）：credits 0.8、1 回合、速率 0.8/30 round2=0.03、
   // billedInput=0.5×180000(runtime-config 真值)=90000、avgTurnSec null（单回合 <2 合格 gap）、
   // model='qfmodel'（runtime-config 顶层）、tps30=0.5×180000/1800=50（近30分钟窗口内）、
-  // T16 生成速度：outTps30 = 窗内已配对估算 6.2（f1 正文 5.2 + 同 message.id 无 usage 行 1，
-  // 整消息归并）÷ 日志配对 3.1s = 2；outEst = round(6.2) = 6（全会话估算合计）。
+  // T16 生成速度：outTps30 = 窗内已配对估算 6.53（f1 正文 5.2 + 同 message.id 无 usage 行 4÷3，
+  // 整消息归并）÷ 日志配对 3.1s = 2.1；outEst = round(6.53) = 7（全会话估算合计）。
   // byModel/totalTurnSec（T6 终值）：fixture 已补 u1 prompt 行（f1−76100ms）与 f1 model →
-  // byModel 单行 qfmodel（turns 1、单轮均值 = round(76.1) = 76、outTps 同 2）；totalTurnSec = 76。
+  // byModel 单行 qfmodel（turns 1、单轮均值 = round(76.1) = 76、outTps 同 2.1）；totalTurnSec = 76。
   // 原生样式数据面（2026-10-26）：rounds=轮数（1）；requests=rid 去重（f1 一条 rid-f1）；
   // cacheHitRate=8000/(1000+8000+100)；tools/edits 来自 fixture 的 3 次工具调用（Bash 失败 1、
-  // Edit +4/−3、Write +2/−0、文件并集 2）；输出三段：f1 整消息归并只有正文 6.2 → txt 6。
+  // Edit +4/−3、Write +2/−0、文件并集 2）；输出三段：f1 整消息归并只有正文 6.53 → txt 7。
   // 时间范围退化到一个点（fixture 仅一条本会话 usage）——单独断言，避免钉死动态时间戳。
   const { firstTs: sessFirstTs, lastTs: sessLastTs, ...sessRest } = st.local.session;
-  assert.deepEqual(sessRest, { id: 'sess-cur', credits: 0.8, creditsBillable: null, creditsFree: null, turns: 1, rateCpm30: 0.03, rateCpm30Billable: null, billedInput: 90000, avgTurnSec: null, model: 'qfmodel', modelName: null, tps30: 50, billingMode: 'credits', input: 1000, output: 10, outEst: 6, cacheRead: 8000, cacheCreate: 100, tps30Tokens: Math.round((9100 / 1800) * 10) / 10, outTps30: 2, byModel: [{ model: 'qfmodel', modelName: null, billingMode: 'credits', credits: 0.8, creditsBillable: null, creditsFree: null, input: 1000, output: 10, cacheRead: 8000, cacheCreate: 100, billedInput: 90000, billedSource: 'runtime-config', turns: 1, outTps: 2, avgTurnSec: 76 }], totalTurnSec: 76, rounds: 1, requests: 1, cacheHitRate: 8000 / 9100, outEstThk: 0, outEstTxt: 6, outEstCall: 0, tools: { calls: 3, errors: 1, byName: [{ name: 'Bash', calls: 1, errors: 1 }, { name: 'Edit', calls: 1, errors: 0 }, { name: 'Write', calls: 1, errors: 0 }] }, edits: { added: 6, removed: 3, files: 2 } });
+  assert.deepEqual(sessRest, { id: 'sess-cur', credits: 0.8, creditsBillable: null, creditsFree: null, turns: 1, rateCpm30: 0.03, rateCpm30Billable: null, billedInput: 90000, avgTurnSec: null, model: 'qfmodel', modelName: null, tps30: 50, billingMode: 'credits', input: 1000, output: 10, outEst: 7, cacheRead: 8000, cacheCreate: 100, tps30Tokens: Math.round((9100 / 1800) * 10) / 10, outTps30: 2.1, byModel: [{ model: 'qfmodel', modelName: null, billingMode: 'credits', credits: 0.8, creditsBillable: null, creditsFree: null, input: 1000, output: 10, cacheRead: 8000, cacheCreate: 100, billedInput: 90000, billedSource: 'runtime-config', turns: 1, outTps: 2.1, avgTurnSec: 76 }], totalTurnSec: 76, rounds: 1, requests: 1, cacheHitRate: 8000 / 9100, outEstThk: 0, outEstTxt: 7, outEstCall: 0, tools: { calls: 3, errors: 1, byName: [{ name: 'Bash', calls: 1, errors: 1 }, { name: 'Edit', calls: 1, errors: 0 }, { name: 'Write', calls: 1, errors: 0 }] }, edits: { added: 6, removed: 3, files: 2 } });
   assert.equal(sessFirstTs, sessLastTs, '单条 usage → 时间范围退化到一个点（不编造）');
   // 计费口径（用户裁定）：内置模型 fixture（有 credits、token 字段虽非零但 credits 优先）→ credits。
   assert.equal(st.local.billingMode, 'credits');
@@ -175,8 +175,8 @@ test('bootstrap exchanges for token, state aggregates fixture', async ()=>{
     billedInput: 90000,
     billedSource: 'runtime-config', turns: 1, rounds: 1, requests: 1, lastTs: 0, avgTurnSec: null,
     billingMode: 'credits', input: 1000, output: 10, cacheRead: 8000, cacheCreate: 100,
-    // T6 终值（同 session pin；sessionsSummary 行无 totalTurnSec）；T16 outTps = 估算 6.2 ÷ 3.1s = 2
-    byModel: [{ model: 'qfmodel', modelName: null, billingMode: 'credits', credits: 0.8, creditsBillable: null, creditsFree: null, input: 1000, output: 10, cacheRead: 8000, cacheCreate: 100, billedInput: 90000, billedSource: 'runtime-config', turns: 1, outTps: 2, avgTurnSec: 76 }],
+    // T6 终值（同 session pin；sessionsSummary 行无 totalTurnSec）；T16 outTps = 估算 6.53 ÷ 3.1s = 2.1
+    byModel: [{ model: 'qfmodel', modelName: null, billingMode: 'credits', credits: 0.8, creditsBillable: null, creditsFree: null, input: 1000, output: 10, cacheRead: 8000, cacheCreate: 100, billedInput: 90000, billedSource: 'runtime-config', turns: 1, outTps: 2.1, avgTurnSec: 76 }],
   });
   assert.ok(st.local.sessions[0].lastTs >= st.local.sessions[1].lastTs, 'lastTs 降序');
   assert.equal(st.local.sessions[1].billedSource, 'fallback200k'); // sess-prev 无 runtime-config
@@ -206,7 +206,7 @@ test('ingest quota stored raw + Host spoof blocked', async ()=>{
 });
 // ---- P2：lastTurn / byModelWindow / emptyState（须在 catalog ingest 测试之前——后者的 decorate
 // 会把 modelName 解析成 'Qoder Model'，本块按「未 ingest catalog → null」锚定未解析态）----
-test('P2: local.lastTurn 为 sess-cur 最新一轮（turnSec 76.1/credits 0.8/billedInput 90000/outTps=估算6.2÷实测3.1s=2）；时间戳相对关系', async () => {
+test('P2: local.lastTurn 为 sess-cur 最新一轮（turnSec 76.1/credits 0.8/billedInput 90000/outTps=估算6.53÷实测3.1s=2.1）；时间戳相对关系', async () => {
   await waitUp();
   const boot = JSON.parse(fs.readFileSync(path.join(env.QUM_HOME, 'bootstrap.json'), 'utf8')).code;
   const token = (await get('/state?bootstrap=' + boot)).headers.get('x-qm-token');
@@ -224,10 +224,10 @@ test('P2: local.lastTurn 为 sess-cur 最新一轮（turnSec 76.1/credits 0.8/bi
   assert.equal(lt.billedInput, 90000);
   assert.equal(lt.billedSource, 'runtime-config');
   assert.equal(lt.billingMode, 'credits');
-  assert.equal(lt.outTps, 2); // T16：估算 6.2（整消息归并）÷ 实测配对 3.1s（夹轮墙钟内）= 2
+  assert.equal(lt.outTps, 2.1); // T16：估算 6.53（整消息归并）÷ 实测配对 3.1s（夹轮墙钟内）= 2.1
 });
 
-test('P2: local.byModelWindow 双列——守恒 Σcredits7d=1.6；qfmodel 行确定；mimo 行 turns 0/outTps=估算4÷实测2s=2/今日列时刻相关', async () => {
+test('P2: local.byModelWindow 双列——守恒 Σcredits7d=1.6；qfmodel 行确定；mimo 行 turns 0/outTps=估算5.33÷实测2s=2.7/今日列时刻相关', async () => {
   await waitUp();
   const boot = JSON.parse(fs.readFileSync(path.join(env.QUM_HOME, 'bootstrap.json'), 'utf8')).code;
   const token = (await get('/state?bootstrap=' + boot)).headers.get('x-qm-token');
@@ -245,7 +245,7 @@ test('P2: local.byModelWindow 双列——守恒 Σcredits7d=1.6；qfmodel 行�
   assert.equal(q.input, 1000); assert.equal(q.output, 10);
   assert.equal(q.cacheRead, 8000); assert.equal(q.cacheCreate, 100);
   assert.equal(q.billedInput, 90000); assert.equal(q.billedSource, 'runtime-config');
-  assert.equal(q.turns, 1); assert.equal(q.avgTurnSec, 76); assert.equal(q.outTps, 2);
+  assert.equal(q.turns, 1); assert.equal(q.avgTurnSec, 76); assert.equal(q.outTps, 2.1);
   assert.equal(q.billingMode, 'credits');
   const m = bw.rows.find((r) => r.model === 'mimo-v2.6-flash');
   assert.equal(m.credits7d, 0.8);
@@ -255,7 +255,7 @@ test('P2: local.byModelWindow 双列——守恒 Σcredits7d=1.6；qfmodel 行�
   assert.equal(m.billedInput, 50000); assert.equal(m.billedSource, 'fallback200k');
   assert.equal(m.turns, 0, 'sess-prev 无 prompt 记录 → 无轮参与');
   assert.equal(m.avgTurnSec, null);
-  assert.equal(m.outTps, 2, 'T16：估算 2+2 ÷ 配对秒 1s+1s（f2/f3 相隔 6h 不重叠）= 2');
+  assert.equal(m.outTps, 2.7, 'T16：估算 8÷3 + 8÷3 ÷ 配对秒 1s+1s（f2/f3 相隔 6h 不重叠）= 2.7');
 });
 
 test('P2: emptyState() 导出且含 P2 默认字段', async () => {
@@ -420,7 +420,7 @@ test('BYOK 会话 → local.billingMode=tokens + 真实 token 四元组 + tps30T
     assert.equal(st.local.session.credits, 0, '无 credits 字段的会话 → 0（诚实读数，非 null）');
     assert.equal(st.local.session.tps30Tokens, Math.round((98000 / 1800) * 10) / 10);
     // T16 生成速度：fixture 无正文块（无估算）且无日志配对 → null（'-- tps'；估算口径的
-    // e2e 覆盖见主 fixture：outTps30 = 估算 6.2 ÷ 实测 3.1s）
+    // e2e 覆盖见主 fixture：outTps30 = 估算 6.53 ÷ 实测 3.1s）
     assert.equal(st.local.session.outTps30, null);
     assert.equal(st.local.sessions[0].billingMode, 'tokens', '会话明细行带自身口径');
     // 窗口求和天然分口径：BYOK 记录不贡献 credits，内置记录不贡献 token → 今日两列各自干净
@@ -506,7 +506,7 @@ test('P3 T4 /state?session=: 带参出 local.active、不带参无该键、未�
   assert.equal(as.tools.errors, 1);
   assert.deepEqual(as.edits, { added: 6, removed: 3, files: 2 });
   assert.ok(as.firstTs <= as.lastTs, '会话时间范围有序');
-  assert.deepEqual([as.outEstThk, as.outEstTxt, as.outEstCall], [0, 6, 0], '思考/正文/工具三段拆分经 active 透传');
+  assert.deepEqual([as.outEstThk, as.outEstTxt, as.outEstCall], [0, 7, 0], '思考/正文/工具三段拆分经 active 透传');
   const miss = await getRaw('&session=S-not-exist');
   assert.deepEqual(miss.local.active, { sessionId: 'S-not-exist', lastTurn: null, session: null });
   const disk = JSON.parse(fs.readFileSync(path.join(env.QUM_HOME, 'state.json'), 'utf8'));

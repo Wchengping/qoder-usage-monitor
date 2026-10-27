@@ -1,21 +1,21 @@
 // tests/est.test.mjs — T16 正文估算 Output + 实测纯模型秒（daemon/est.mjs）
-// 口径锚点（credits-overlay.py 移植）：est = CJK×1.3 + 其余÷4；三类块（thinking/text/tool_use）
+// 口径锚点（credits-overlay.py 移植 + 2026-10-27 校准）：est = CJK×1.3 + 其余÷3；三类块（thinking/text/tool_use）
 // 按 block_text 累加；<synthetic> 整条跳过（scanner 层）；速率 = est ÷ 实测秒，无可估算/无秒 → null。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { estTokens, blockText, estOutOfContent, estBreakdownOfContent, parseTimingLine, mergeIntervalMs, rateTps } from '../daemon/est.mjs';
 import { parseJsonlLine, parseJsonObject } from '../daemon/scanner.mjs';
 
-test('estTokens: CJK×1.3 + 其余÷4（与 credits-overlay.py:571 同式）；空/非串 → 0', () => {
-  assert.equal(estTokens('abcd'), 1);            // 4 ÷ 4
-  assert.equal(estTokens('你好'), 2.6);           // 2 × 1.3
-  assert.equal(estTokens('你好ab'), 3.1);         // 2×1.3 + 2÷4
+test('estTokens: CJK×1.3 + 其余÷3（2026-10-27 对原生显示两样本标定）；空/非串 → 0', () => {
+  assert.equal(estTokens('abcd'), 4 / 3);        // 4 ÷ 3
+  assert.equal(estTokens('你好'), 2.6);            // 2 × 1.3
+  assert.equal(estTokens('你好ab'), 2.6 + 2 / 3); // 2×1.3 + 2÷3
   assert.equal(estTokens('，。'), 2.6);            // CJK 标点入 CJK 桶（探针校准同范围）
   assert.equal(estTokens(''), 0);
   assert.equal(estTokens(null), 0);
   assert.equal(estTokens(42), 0);
   // 混排常见形态：ASCII 注释 + 中文说明
-  assert.equal(estTokens('const x = 1; // 变量'), 6.6); // 16 ASCII ÷4 = 4 + 2 CJK ×1.3 = 2.6
+  assert.equal(estTokens('const x = 1; // 变量'), 16 / 3 + 2.6); // 16 ASCII ÷3 + 2 CJK ×1.3
 });
 
 test('blockText: thinking→thinking / text→text / tool_use→input JSON；其余块与缺字段 → 空串', () => {
@@ -31,12 +31,12 @@ test('blockText: thinking→thinking / text→text / tool_use→input JSON；其
 test('estOutOfContent: 数组仅三类块累加；字符串整串估算；缺席/乱值 → 0', () => {
   const blocks = [
     { type: 'thinking', thinking: '你好你好' },           // 4×1.3 = 5.2
-    { type: 'text', text: 'abcd' },                       // 4÷4 = 1
-    { type: 'tool_use', input: { k: 'v' } },              // '{"k":"v"}' 9÷4 = 2.25
+    { type: 'text', text: 'abcd' },                       // 4÷3
+    { type: 'tool_use', input: { k: 'v' } },              // '{"k":"v"}' 9÷3
     { type: 'image', source: {} },                        // 不计
     'not-a-block', null,
   ];
-  assert.equal(estOutOfContent(blocks), 5.2 + 1 + 2.25);
+  assert.equal(estOutOfContent(blocks), 5.2 + 4 / 3 + 9 / 3);
   assert.equal(estOutOfContent('你好'), 2.6, '字符串 content 整串估算');
   assert.equal(estOutOfContent(undefined), 0);
   assert.equal(estOutOfContent({}), 0);
@@ -47,23 +47,23 @@ test('estOutOfContent: 数组仅三类块累加；字符串整串估算；缺席
 test('estBreakdownOfContent: thinking/text/tool_use 三类分桶；合计与 estOutOfContent 一致；字符串→txt；乱值→全 0', () => {
   const blocks = [
     { type: 'thinking', thinking: '你好你好' }, // 4×1.3 = 5.2
-    { type: 'text', text: 'abcd' },             // 1
-    { type: 'tool_use', input: { k: 'v' } },    // 2.25
+    { type: 'text', text: 'abcd' },             // 4÷3
+    { type: 'tool_use', input: { k: 'v' } },    // 9÷3
     { type: 'image', source: {} },              // 不计
     null, 'x',
   ];
   const b = estBreakdownOfContent(blocks);
-  assert.deepEqual(b, { thk: 5.2, txt: 1, call: 2.25 });
+  assert.deepEqual(b, { thk: 5.2, txt: 4 / 3, call: 9 / 3 });
   assert.equal(b.thk + b.txt + b.call, estOutOfContent(blocks), '三段合计 = 既有合计（同源同序）');
   assert.deepEqual(estBreakdownOfContent('你好'), { thk: 0, txt: 2.6, call: 0 });
   assert.deepEqual(estBreakdownOfContent(undefined), { thk: 0, txt: 0, call: 0 });
   assert.deepEqual(estBreakdownOfContent({}), { thk: 0, txt: 0, call: 0 });
   // 真实 assistant message.content：thinking + text + tool_use 混排
   assert.deepEqual(estBreakdownOfContent([
-    { type: 'thinking', thinking: 'abcde' },   // 5÷4 = 1.25
+    { type: 'thinking', thinking: 'abcde' },   // 5÷3
     { type: 'text', text: '好' },              // 1.3
-    { type: 'tool_use', name: 'Bash', input: { command: 'ls' } }, // '{"command":"ls"}' 16÷4 = 4
-  ]), { thk: 1.25, txt: 1.3, call: 4 });
+    { type: 'tool_use', name: 'Bash', input: { command: 'ls' } }, // '{"command":"ls"}' 16÷3
+  ]), { thk: 5 / 3, txt: 1.3, call: 16 / 3 });
 });
 
 test('rateTps: est ÷ 秒 round1；无可估算输出/无秒/非有限 → null（绝不 0/NaN/Infinity）', () => {
@@ -130,12 +130,12 @@ test('parseJsonlLine T16: outEst（行内块估算）+ rid（日志配对键）+
   assert.equal(r.outEstTxt, 4 * 1.3);
   assert.equal(r.outEstCall, 0);
   const mixed = parseJsonlLine(asstLine({ content: [
-    { type: 'thinking', thinking: 'abcd' },     // 1
-    { type: 'text', text: 'efgh' },              // 1
-    { type: 'tool_use', input: { a: 1 } },       // '{"a":1}' 7÷4 = 1.75
+    { type: 'thinking', thinking: 'abcd' },     // 4÷3
+    { type: 'text', text: 'efgh' },              // 4÷3
+    { type: 'tool_use', input: { a: 1 } },       // '{"a":1}' 7÷3
   ] }));
-  assert.equal(mixed.outEst, 3.75);
-  assert.deepEqual([mixed.outEstThk, mixed.outEstTxt, mixed.outEstCall], [1, 1, 1.75]);
+  assert.equal(mixed.outEst, 4 / 3 + 4 / 3 + 7 / 3);
+  assert.deepEqual([mixed.outEstThk, mixed.outEstTxt, mixed.outEstCall], [4 / 3, 4 / 3, 7 / 3]);
   assert.equal(parseJsonlLine(asstLine({ usage: { input_tokens: 1 } })).rid, null, '缺 request_id → null');
   // 无 usage 行不产记录（整消息估算由 server 两趟合并归并，见 server.test）
   assert.equal(parseJsonObject({ type: 'assistant', timestamp: '2026-10-10T00:00:00Z', message: { id: 'm', content: [{ type: 'text', text: 'x' }] } }), null);

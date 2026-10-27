@@ -44,7 +44,7 @@
 // T13+ 用户裁定（strip v4 / 模型名 / 会话明细）：
 //  - 生成速度 tps（T16 口径，覆盖 T15）：**Output 用正文估算，不是 usage 上报**——内置模型
 //    usage.output_tokens 恒 0，分子换 est.mjs 正文估算（thinking/text/tool_use 块；est_tokens =
-//    CJK×1.3 + 其余÷4），分母为 qodercli.log request 配对的**实测纯模型秒**（区间合并；无日志轮
+//    CJK×1.3 + 其余÷3），分母为 qodercli.log request 配对的**实测纯模型秒**（区间合并；无日志轮
 //    兜底 = 轮时长−工具时间）。估算值一律带 ~：speed 模块 full「生成速度 ~N tps · 近30分钟」+
 //    诚实注记；strip 'tps' 迷你槽读 lastTurn.outTps（null → '-- tps'）。此前的
 //    输入速率字段（tps30/tps30Tokens）保留在 daemon 数据面但不再呈现；tokens 口径
