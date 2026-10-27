@@ -108,12 +108,13 @@ test('mock-state.json mirrors the real daemon state.json schema', () => {
   assert.deepEqual(Object.keys(s.local).sort(),
     ['active', 'byModelWindow', 'contextWindow', 'history', 'lastTurn', 'modelCatalogMeta', 'session', 'sessions', 'today', 'week', 'window5h']);
   // Session strip：local.session = scanner sessionStats 产出（形状钉死——v7 原生样式新增
-  // rounds/requests/cacheHitRate/时间范围/思考三段/工具体/编辑增量）
+  // rounds/requests/cacheHitRate/时间范围/思考三段/工具体/编辑增量；T16 增补
+  // outTok/outExact/outTps30Exact：真值优先输出与估算标记）
   assert.deepEqual(Object.keys(s.local.session).sort(),
     ['avgTurnSec', 'billedInput', 'byModel', 'cacheHitRate', 'credits', 'creditsBillable', 'creditsFree',
       'edits', 'firstTs', 'id', 'lastTs', 'model', 'modelName', 'outEst', 'outEstCall', 'outEstThk',
-      'outEstTxt', 'outTps30', 'rateCpm30', 'rateCpm30Billable', 'requests', 'rounds', 'tools',
-      'totalTurnSec', 'tps30', 'turns']);
+      'outEstTxt', 'outExact', 'outTok', 'outTps30', 'outTps30Exact', 'rateCpm30',
+      'rateCpm30Billable', 'requests', 'rounds', 'tools', 'totalTurnSec', 'tps30', 'turns']);
   assert.equal(typeof s.local.session.id, 'string');
   assert.equal(s.local.session.credits, 123.4);
   assert.equal(s.local.session.turns, 41);
@@ -132,7 +133,10 @@ test('mock-state.json mirrors the real daemon state.json schema', () => {
   assert.deepEqual(s.local.session.edits, { added: 126, removed: 38, files: 7 });
   assert.ok(s.local.session.firstTs < s.local.session.lastTs);
   assert.equal(s.local.session.outEstThk + s.local.session.outEstTxt + s.local.session.outEstCall,
-    s.local.session.outEst, '思考/正文/工具三段估算之和 = 输出估算');
+    s.local.session.outEst, '思考/正文/工具三段估算之和 = 纯估算输出');
+  assert.equal(s.local.session.outTok, 94); // 真值优先输出（mock 无真实 output → 回落估算）
+  assert.equal(s.local.session.outExact, false, '含估算 → 呈现带 ~');
+  assert.equal(s.local.session.outTps30Exact, false);
   // active.session 与全局锚定会话同形（v7 悬停卡/会话簇都读它）
   for (const k of ['rounds', 'requests', 'cacheHitRate', 'tools', 'edits']) {
     assert.deepEqual(s.local.active.session[k], s.local.session[k], `active.session.${k}`);

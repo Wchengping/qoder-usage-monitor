@@ -23,12 +23,13 @@
 // 可能持有升级前的旧记录——其 sessionId 为 undefined（字段整个缺席），消费侧（sessionStats）
 // 一律按"无会话归属"容忍；mergeDaily/dailyRows/aggregate 不读 sessionId，完全不受影响。
 
-// T16 口径（用户裁定，移植 credits-overlay.py）：**Output 用正文估算，不是 usage 上报**——
-// 内置模型 usage.output_tokens 恒 0（真机实测无一非零），生成速度分子改为 est.mjs 的
-// est_tokens 估算（thinking/text/tool_use 块，<synthetic> 整条跳过，呈现带 ~）；分母为
-// qodercli.log request.started→completed 按 request_id 配对的**实测纯模型秒**（区间合并，
-// 并发不重复计时），轮级无日志兜底 = 轮墙钟 − 工具区间。outTps / outTps30 / byModel.outTps
-// 三族字段同源换算；window 的 speedTps（P1 历史指标，呈现层已不消费）保留旧口径不动。
+// T16 口径（用户裁定，移植 credits-overlay.py）：Output **有真值用真值，无真值才估**——
+// usage.output_tokens > 0 时直接采用；为 0（内置模型多数行，真机实测）才走 est.mjs 的
+// est_tokens 正文估算（thinking/text/tool_use 块，<synthetic> 整条跳过，呈现带 ~）。免费模型/
+// BYOK 行常带真实 output_tokens，绝不拿估算覆盖。分母为 qodercli.log request.started→completed
+// 按 request_id 配对的**实测纯模型秒**（区间合并，并发不重复计时），轮级无日志兜底 = 轮墙钟 −
+// 工具区间。outTps / outTps30 / byModel.outTps 三族字段同源换算，各带 *Exact 标记；
+// window 的 speedTps（P1 历史指标，呈现层已不消费）保留旧口径不动。
 
 import { estBreakdownOfContent, mergeIntervalMs, rateTps } from './est.mjs';
 
@@ -104,7 +105,8 @@ export function runtimeConfigOf(o) {
 }
 
 /**
- * 记录级计费口径（真机数据自证，用户裁定）：内置模型写 credits 且 token 恒 0 → 'credits'；
+ * 记录级计费口径（真机数据自证，用户裁定）：内置模型写 credits（token 字段可能为 0，也可能
+ * 带真实 output_tokens；只要 credits 是有限 ≥0 数字就判 credits）→ 'credits'；
  * 自定义 BYOK 模型（model 前缀 qoder-custom-<uuid>/）不写 credits，只有真实 token → 'tokens'。
  * 判据只看数据：credits 是有限 ≥0 数字 → 'credits'；否则任一 token 非零 → 'tokens'；否则 null
  * （未知，消费侧回落 'credits' 现状）。两口径不可换算，绝不折算。
@@ -214,26 +216,53 @@ function dedupe(records) {
  * 生成速度三族字段（outTps/outTps30/byModel.outTps）已换「正文估算 ÷ 实测纯模型秒」，见下。
  */
 function speedOf(sorted) {
-  let outSum = 0;
+  let outTotal = 0;
   let secSum = 0;
   let i = 0;
   while (i < sorted.length) {
     let j = i;
     while (j + 1 < sorted.length && sorted[j + 1].ts - sorted[j].ts < CLUSTER_GAP_MS) j++;
-    for (let k = i; k <= j; k++) outSum += sorted[k].output;
+    for (let k = i; k <= j; k++) outTotal += sorted[k].output;
     secSum += Math.max((sorted[j].ts - sorted[i].ts) / 1000, 1);
     i = j + 1;
   }
-  return secSum === 0 ? 0 : outSum / secSum;
+  return secSum === 0 ? 0 : outTotal / secSum;
 }
 
 // ---- T16：正文估算 Output ÷ 实测纯模型秒（est.mjs 口径的记录级装配）----
 
-/** Σ outEst（有限数才计；旧缓存记录缺字段 → 0 贡献，绝不 NaN）。 */
+/** Σ outEst（纯估算；有限数才计；旧缓存记录缺字段 → 0 贡献，绝不 NaN）。 */
 function estSum(arr) {
   let s = 0;
   for (const r of arr) if (typeof r.outEst === 'number' && Number.isFinite(r.outEst)) s += r.outEst;
   return s;
+}
+
+/**
+ * 记录级最佳 Output：usage.output_tokens > 0 → 供应商真值；否则正文估算 outEst。
+ * 内置模型多数行 output=0（只能估），但免费模型/BYOK 行常带真值——有真值就不估。
+ */
+function bestOutOf(r) {
+  if (r && typeof r.output === 'number' && r.output > 0) return r.output;
+  const e = r && r.outEst;
+  return typeof e === 'number' && Number.isFinite(e) ? e : 0;
+}
+
+/** Σ 最佳 Output（真值优先，缺失回落估算）。 */
+function outSum(arr) {
+  let s = 0;
+  for (const r of arr) s += bestOutOf(r);
+  return s;
+}
+
+/** 最佳 Output 是否全部来自真值（无任何正值估算参与）；空集/全零 → true。 */
+function outExactOf(arr) {
+  for (const r of arr) {
+    if (r && r.output > 0) continue;
+    const e = r && r.outEst;
+    if (typeof e === 'number' && Number.isFinite(e) && e > 0) return false;
+  }
+  return true;
 }
 
 /** 记录是否携带 qodercli.log 配对区间 [mt0, mt1]（T16 实测纯模型秒的最小单位）。 */
@@ -249,14 +278,15 @@ function intervalsOf(arr) {
 }
 
 /**
- * T16 记录集生成速度（窗口/模型组通用）：**仅已配对记录参与**——分子（正文估算）与分母
- * （实测纯模型秒，区间合并防并发重复）取同一记录集，速率不被"有输出没日志"的记录抬高；
- * 无任何配对记录 → null（'-- tps'，窗口/模型组不兜底：Rate = Σ实测模型秒）。
+ * T16 记录集生成速度（窗口/模型组通用）：**仅已配对记录参与**——分子（真值优先/缺失估算）
+ * 与分母（实测纯模型秒，区间合并防并发重复）取同一记录集，速率不被"有输出没日志"的记录抬高；
+ * 无任何配对记录 → {tps:null, exact:null}（'-- tps'，窗口/模型组不兜底：Rate = Σ实测模型秒）。
  */
-function pairedRate(arr) {
+function pairedSpeed(arr) {
   const paired = arr.filter(isPaired);
-  if (!paired.length) return null;
-  return rateTps(estSum(paired), mergeIntervalMs(intervalsOf(paired)));
+  if (!paired.length) return { tps: null, exact: null };
+  const tps = rateTps(outSum(paired), mergeIntervalMs(intervalsOf(paired)));
+  return { tps, exact: tps === null ? null : outExactOf(paired) };
 }
 
 // 编辑类工具（代码变更行数只在它们的入参里可重建；Bash 驱动的改文件无法还原 → 不计）。
@@ -515,20 +545,24 @@ export function dailyRows(records, tz) {
  *  - model：ctxWindows（Map<sid,{contextWindow,model}> 或旧 Map<sid,数>）里本会话的 model，
  *    非空字符串保留，否则 null（旧缓存无 model 字段 → null，呈现层出 '--'）；
  *  - tps30：输入吞吐（tok/s，用户裁定）——Σ 本会话 ts > now−30min 的 (ratio×contextWindow) / 1800，
- *    round 1 位小数；窗内无 ratio 记录 → null（与 0 区分）。**非生成速度**：真机 output token
- *    恒 0 无本地真值，此为计费输入速率（inspector 口径），呈现层须如实标注。
+ *    round 1 位小数；窗内无 ratio 记录 → null（与 0 区分）。**非生成速度**：这是计费输入速率
+ *    （inspector 口径），与 output 真值/估算无关，呈现层须如实标注。
  * 速率 rateCpm30 仍是 credits/min（T12 校准主单位）——与 tps30 并存（币种不同，皆本地真值）。
  * 计费口径（用户裁定，见 modeOfRecord）另发三个字段：
  *  - billingMode：本会话口径（'credits'|'tokens'|null，取最新一条可判定记录；中途换模型跟随最新）；
- *  - input/output/cacheRead/cacheCreate：本会话真实 token 合计（内置模型恒 0，BYOK 才有值）；
+ *  - input/output/cacheRead/cacheCreate：本会话真实 token 合计（内置模型多数行为 0，
+ *    免费模型/BYOK 行有值）；
  *  - tps30Tokens：真实 token 输入吞吐 Σ(input+cacheRead+cacheCreate 窗内)/1800 round1；
  *    窗内无记录 → null，有记录但 token 全零 → 0。tokens 口径呈现须用它而非 tps30（估算）。
  *  - outTps30：生成速度（tok/s，用户裁定 T16 口径）——近30分钟窗内
- *    **正文估算 Output ÷ 实测纯模型秒**（分子 est.mjs est_tokens；分母 qodercli.log
- *    request 配对区间合并秒，round1）。窗口级不做工具时间兜底（Rate = Σ实测模型秒）；
- *    无可估算输出或无实测秒 → null（呈现 '-- tps'，不出 0 防误读）。
- *  - outEst：本会话正文估算 Output 合计（整数，呈现带 ~）。内置模型 usage.output_tokens
- *    恒 0 时它就是唯一可见的输出口径；只覆盖转录正文（系统提示词/工具定义属输入侧）。
+ *    **最佳 Output ÷ 实测纯模型秒**（分子：usage.output_tokens 真值优先，缺失才用 est.mjs
+ *    正文估算；分母 qodercli.log request 配对区间合并秒，round1）。窗口级不做工具时间兜底
+ *    （Rate = Σ实测模型秒）；无输出或无实测秒 → null（呈现 '-- tps'，不出 0 防误读）。
+ *  - outEst：本会话**纯正文估算** Output 合计（整数，三段拆分之和；呈现带 ~）；
+ *    只覆盖转录正文（系统提示词/工具定义属输入侧）。
+ *  - outTok：本会话**最佳 Output** 合计（真值优先、缺失估算；整数）；outExact = 是否全部
+ *    来自真实 usage.output_tokens；outTps30Exact 同义标记速率分子（null = 无速率）。
+ *    有真值的会话呈现不带 ~，估算/混合会话带 ~。
  *  - 原生样式数据面（2026-10-26，第 5 参 toolEvents 为 server readRecords 的 [{sid,ts,name,err,add,del,file}]）：
  *    rounds（buildTurns 轮数）、requests（request_id 去重；缺 rid 各行计 1）、
  *    cacheHitRate（cacheRead/(input+cacheRead+cacheCreate)；分母 0 → null）、
@@ -588,10 +622,11 @@ export function sessionStatsFor(records, now, ctxWindows, sessionId, toolEvents)
   }
   const avgTurnSec = gaps.length < 2 ? null : Math.round(gaps.reduce((a, b) => a + b, 0) / gaps.length / 1000);
   const billedWin = billedOf(inWindow, ctxWindows).billedInput;
-  // T16 生成速度：分子 = 窗内**已配对**记录的正文估算 Output（est.mjs；message.id 归并口径）；
-  // 分母 = 同一记录集的日志配对区间**合并**秒（并发调用不重复计时）。分子分母同集，
-  // 无实测秒 / 无可估算输出 → null（'-- tps'，与 0 区分，不出 0 防误读）。
-  const outTps30 = pairedRate(inWindow);
+  // T16 生成速度：分子 = 窗内**已配对**记录的 Output（usage.output_tokens 真值优先，缺失才用
+  // est.mjs 正文估算；message.id 归并口径）；分母 = 同一记录集的日志配对区间**合并**秒
+  // （并发调用不重复计时）。分子分母同集，无实测秒 / 无输出 → null（'-- tps'，与 0 区分）。
+  // exact 标记：true = 该速率全部来自真值；false = 至少一条为估算；null = 无速率。
+  const out30 = pairedSpeed(inWindow);
   const turns = buildTurns(all.filter((r) => r.sessionId === sessionId)); // 轮构建用含 prompt 的 all
   // P3 #64：null 轮（全空闲测不出）不计入总耗时；一个都没有 → null（呈现 '--'）。
   const timed = turns.filter((t) => typeof t.turnSec === 'number');
@@ -617,7 +652,9 @@ export function sessionStatsFor(records, now, ctxWindows, sessionId, toolEvents)
     billingMode,
     input,
     output,
-    outEst: Math.round(estSum(mine)), // T16 本会话正文估算 Output 合计（整数；呈现带 ~）
+    outEst: Math.round(estSum(mine)), // 纯正文估算合计（整数，呈现带 ~；三段拆分之和）
+    outTok: Math.round(outSum(mine)), // 最佳 Output：真值优先、缺失估算（整数）
+    outExact: outExactOf(mine),       // outTok 是否全部来自真实 usage.output_tokens
     outEstThk: Math.round(estThk),    // 原生样式：思考段估算（整数）
     outEstTxt: Math.round(estTxt),    // 原生样式：正文段估算（整数）
     outEstCall: Math.round(estCall),  // 原生样式：工具调用入参段估算（整数）
@@ -625,7 +662,8 @@ export function sessionStatsFor(records, now, ctxWindows, sessionId, toolEvents)
     cacheCreate,
     // 真实 token 输入吞吐（tokens 口径呈现用）：窗内无记录 → null；有记录但 token 全零 → 0。
     tps30Tokens: inWindow.length === 0 ? null : Math.round((winTokens / 1800) * 10) / 10,
-    outTps30,
+    outTps30: out30.tps,
+    outTps30Exact: out30.exact,
     byModel,
     totalTurnSec,
     // ---- 原生样式（2026-10-26）：底栏会话簇 + 悬停摘要卡 ----
@@ -640,7 +678,7 @@ export function sessionStatsFor(records, now, ctxWindows, sessionId, toolEvents)
 }
 
 export function sessionStats(records, now, ctxWindows, toolEvents) {
-  const empty = { id: null, credits: null, creditsBillable: null, creditsFree: null, turns: 0, rateCpm30: null, rateCpm30Billable: null, billedInput: null, avgTurnSec: null, model: null, tps30: null, billingMode: null, input: 0, output: 0, outEst: null, cacheRead: 0, cacheCreate: 0, tps30Tokens: null, outTps30: null, byModel: [], totalTurnSec: null, rounds: 0, requests: 0, cacheHitRate: null, firstTs: null, lastTs: null, outEstThk: 0, outEstTxt: 0, outEstCall: 0, tools: { calls: 0, errors: 0, byName: [] }, edits: null };
+  const empty = { id: null, credits: null, creditsBillable: null, creditsFree: null, turns: 0, rateCpm30: null, rateCpm30Billable: null, billedInput: null, avgTurnSec: null, model: null, tps30: null, billingMode: null, input: 0, output: 0, outEst: null, outTok: null, outExact: null, cacheRead: 0, cacheCreate: 0, tps30Tokens: null, outTps30: null, outTps30Exact: null, byModel: [], totalTurnSec: null, rounds: 0, requests: 0, cacheHitRate: null, firstTs: null, lastTs: null, outEstThk: 0, outEstTxt: 0, outEstCall: 0, tools: { calls: 0, errors: 0, byName: [] }, edits: null };
   const all = dedupe([...records]).sort((a, b) => a.ts - b.ts);
   const sorted = all.filter((r) => r.kind !== 'prompt'); // P2：prompt 记录不参与统计口径
   let id = null;
@@ -714,11 +752,11 @@ export function lastTurnOfSession(records, ctxMeta, sessionId, toolSpans) {
     if (m) { billingMode = m; break; }
   }
   const billed = billedOf(t.records, ctxMeta);
-  // T16 轮级生成速度 = 本轮正文估算 Output ÷ 本轮纯模型秒：
+  // T16 轮级生成速度 = 本轮最佳 Output（真值优先，缺失估算）÷ 本轮纯模型秒：
   //   首选（实测）：轮内已配对记录（分子分母同集）区间合并并夹到轮墙钟 [promptTs, endTs]——
   //   同轮多请求/并发不重复计时；
   //   兜底（无可用日志的轮）：轮端到端 − 已配对合并的工具区间（toolSpans 未传 → 纯墙钟），
-  //   分子取轮内全部记录估算；
+  //   分子取轮内全部记录；
   //   分母或分子为 0 → null（'-- tps'，绝不除 0、不出 0 防误读）。
   const paired = t.records.filter(isPaired);
   const pairedMs = mergeIntervalMs(intervalsOf(paired), t.promptTs, t.endTs);
@@ -726,7 +764,8 @@ export function lastTurnOfSession(records, ctxMeta, sessionId, toolSpans) {
   const secMs = usePaired
     ? pairedMs
     : Math.max(0, (t.endTs - t.promptTs) - toolSecMs(toolSpans, sessionId, t.promptTs, t.endTs));
-  const outTps = rateTps(estSum(usePaired ? paired : t.records), secMs);
+  const rateRecords = usePaired ? paired : t.records;
+  const outTps = rateTps(outSum(rateRecords), secMs);
   const last = t.records[t.records.length - 1];
   return {
     sessionId, promptTs: t.promptTs, endTs: t.endTs, turnSec: t.turnSec,
@@ -738,7 +777,10 @@ export function lastTurnOfSession(records, ctxMeta, sessionId, toolSpans) {
     creditsFree: cf.creditsFree,
     input, output, cacheRead, cacheCreate,
     billedInput: billed.billedInput, billedSource: billed.billedInputSource,
+    outTok: Math.round(outSum(t.records)),
+    outExact: outExactOf(t.records),
     outTps,
+    outTpsExact: outTps === null ? null : outExactOf(rateRecords),
   };
 }
 
@@ -785,9 +827,9 @@ export function byModelOf(usageRecs, turns, ctxMeta) {
     }
     const cf = creditFactsOf(g);
     const billed = billedOf(g, ctxMeta);
-    // T16 模型组生成速度 = 该组已配对记录的「正文估算 Output ÷ 实测纯模型秒」（区间合并，
-    // 并发不重复计时；无配对记录 → null，'-- tps'）。旧 speedOf(output>0 簇) 口径退役。
-    const speed = pairedRate(g);
+    // T16 模型组生成速度 = 该组已配对记录的 Output（真值优先，缺失估算）÷ 实测纯模型秒
+    // （区间合并，并发不重复计时；无配对记录 → null，'-- tps'）。旧 speedOf(output>0 簇) 口径退役。
+    const sp = pairedSpeed(g);
     const p = participated.get(key);
     rows.push({
       model: key, modelName: null, billingMode, credits: cf.credits,
@@ -798,7 +840,8 @@ export function byModelOf(usageRecs, turns, ctxMeta) {
       cacheCreate: g.reduce((a, r) => a + (r.cacheCreate || 0), 0),
       billedInput: billed.billedInput, billedSource: billed.billedInputSource,
       turns: p ? p.turns : 0,
-      outTps: speed,
+      outTps: sp.tps,
+      outTpsExact: sp.exact,
       avgTurnSec: p && p.timed > 0 ? Math.round(p.sum / p.timed) : null,
     });
   }
@@ -860,9 +903,9 @@ export function byModelWindowOf(all, ctxMeta, now) {
       if (m) { billingMode = m; break; }
     }
     const billed = billedOf(g, ctxMeta);
-    // T16 模型组生成速度 = 该组已配对记录的「正文估算 Output ÷ 实测纯模型秒」（区间合并，
-    // 并发不重复计时；无配对记录 → null，'-- tps'）。旧 speedOf(output>0 簇) 口径退役。
-    const speed = pairedRate(g);
+    // T16 模型组生成速度 = 该组已配对记录的 Output（真值优先，缺失估算）÷ 实测纯模型秒
+    // （区间合并，并发不重复计时；无配对记录 → null，'-- tps'）。旧 speedOf(output>0 簇) 口径退役。
+    const sp = pairedSpeed(g);
     const p = participated.get(key);
     const cfToday = creditsOf(g.filter((r) => r.ts >= todayStart));
     const cf7d = creditsOf(g);
@@ -877,7 +920,8 @@ export function byModelWindowOf(all, ctxMeta, now) {
       cacheCreate: g.reduce((a, r) => a + (r.cacheCreate || 0), 0),
       billedInput: billed.billedInput, billedSource: billed.billedInputSource,
       turns: p ? p.turns : 0,
-      outTps: speed,
+      outTps: sp.tps,
+      outTpsExact: sp.exact,
       avgTurnSec: p && p.timed > 0 ? Math.round(p.sum / p.timed) : null,
     });
   }

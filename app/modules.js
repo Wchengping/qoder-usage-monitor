@@ -42,13 +42,13 @@
 //    行尾追加计费段。
 //
 // T13+ 用户裁定（strip v4 / 模型名 / 会话明细）：
-//  - 生成速度 tps（T16 口径，覆盖 T15）：**Output 用正文估算，不是 usage 上报**——内置模型
-//    usage.output_tokens 恒 0，分子换 est.mjs 正文估算（thinking/text/tool_use 块；est_tokens =
-//    CJK×1.3 + 其余÷3），分母为 qodercli.log request 配对的**实测纯模型秒**（区间合并；无日志轮
-//    兜底 = 轮时长−工具时间）。估算值一律带 ~：speed 模块 full「生成速度 ~N tps · 近30分钟」+
-//    诚实注记；strip 'tps' 迷你槽读 lastTurn.outTps（null → '-- tps'）。此前的
-//    输入速率字段（tps30/tps30Tokens）保留在 daemon 数据面但不再呈现；tokens 口径
-//    「输出」行同源换 outEst（~N tok）。
+//  - 生成速度 tps（T16 口径，覆盖 T15）：**Output 真值优先，缺失才估算**——usage.output_tokens
+//    > 0 直接用真值；为 0（内置模型多数行）才用 est.mjs 正文估算（thinking/text/tool_use 块；
+//    est_tokens = CJK×1.3 + 其余÷3）。分母为 qodercli.log request 配对的**实测纯模型秒**（区间
+//    合并；无日志轮兜底 = 轮时长−工具时间）。估算值带 ~、全真值不带：speed 模块 full「生成速度
+//    N tps · 近30分钟」+ 诚实注记；strip 'tps' 迷你槽读会话 outTps30 / 末轮 outTps
+//    （null → '-- tps'）。此前的输入速率字段（tps30/tps30Tokens）保留在 daemon 数据面但不再
+//    呈现；tokens 口径「输出」行同源用 outTok（真值优先，估算才带 ~）。
 //  - 模型名：runtime-config 顶层 model（真机 'qfmodel'）→ daemon 发布 local.session.model /
 //    local.sessions[].model；session 模块 full 增「模型」行 + strip 'model' 迷你槽（T14：解析名
 //    ≤18 字原样、超长加 '…'；未解析回落短句柄/id:<8>，绝不做中段标识符截断）。
@@ -476,14 +476,18 @@ const session = {
     const req = isNum(s.requests) ? ` · ${Math.round(s.requests)} 次` : '';
     const scale = `${rounds} 轮${req}`;
     if (tk) {
-      // 真实 token 三明细（BYOK 本地真值）：未命中输入 / 缓存命中读 / 输出（T16：输出换 outEst 估算）；
-      // 速度行 = T16 生成速度 outTps30（估算 ÷ 实测秒，带 ~）。
+      // 真实 token 三明细（BYOK 本地真值）：未命中输入 / 缓存命中读 / 输出（T16：输出真值优先，
+      // 无真值才估算）；速度行 = T16 生成速度 outTps30（最佳输出 ÷ 实测秒，估算才带 ~）。
       box.append(line('本会话', `${f.fmtTokens(realPrompt(s))} tok · ${scale}`));
-      box.append(line('生成速度', tpsText(f, isNum(s.outTps30) ? s.outTps30 : null)));
+      box.append(line('生成速度', tpsText(f, isNum(s.outTps30) ? s.outTps30 : null, s.outTps30Exact === true)));
       box.append(line('输入未命中', `${f.fmtTokens(s.input)} tok`));
       box.append(line('缓存命中', `${f.fmtTokens(s.cacheRead)} tok`));
-      // T16「Output 用正文估算」：优先 outEst（est.mjs，带 ~）；旧 state 无字段 → 回落真实 output
-      box.append(line('输出', isNum(s.outEst) ? `~${f.fmtTokens(s.outEst)} tok` : `${f.fmtTokens(s.output)} tok`));
+      // Output 最佳值：真值优先（usage.output_tokens > 0），无真值才带 ~ 估算；旧 state 回落 outEst。
+      const outBest = isNum(s.outTok) ? s.outTok : isNum(s.outEst) ? s.outEst : null;
+      const outApprox = !(isNum(s.outTok) && s.outExact === true);
+      box.append(line('输出', outBest !== null
+        ? `${outApprox ? '~' : ''}${f.fmtTokens(outBest)} tok`
+        : `${f.fmtTokens(s.output)} tok`));
     } else {
       box.append(withCreditTip(
         line('本会话', `${f.fmtCredits(creditShown(s))} cr · ${scale}`), s, 'credits', f));
@@ -552,9 +556,9 @@ function sessionRowEl(f, state, s) {
   return el;
 }
 
-/** T16 估算速率显示：有值 → '~N tps'（正文估算，一律带 ~）；null/乱值 → '-- tps'。 */
-function tpsText(f, v) {
-  return isNum(v) ? `~${f.fmtNum(v, 1)} tps` : '-- tps';
+/** 生成速度显示：有值 → '[~]N.N tps'（exact=true 时无 ~，真值）；null/乱值 → '-- tps'。 */
+function tpsText(f, v, exact = false) {
+  return isNum(v) ? `${exact ? '' : '~'}${f.fmtNum(v, 1)} tps` : '-- tps';
 }
 
 /** byModel 单模型行文本（session full 表与会话明细展开行共用，spec §4.5）：
@@ -566,7 +570,7 @@ function byModelRowText(f, state, m) {
   const rowTk = rowTokensMode(state, o);
   // byModel.turns = 该模型参与的轮数（scanner byModelOf 口径），故标「轮」。
   const turns = isNum(o.turns) ? String(Math.round(o.turns)) : '--';
-  const outTps = tpsText(f, o.outTps);
+  const outTps = tpsText(f, o.outTps, o.outTpsExact === true);
   const avg = isNum(o.avgTurnSec) ? `${Math.round(o.avgTurnSec)}s` : '--';
   const crSeg = rowTk ? '-- cr' : `${f.fmtCredits(creditShown(o))} cr`;
   const approx = o.billedSource === 'fallback200k' || o.billedSource === 'mixed';
@@ -918,14 +922,14 @@ const cache = {
   },
 };
 
-// speed（T16 口径：正文估算 Output ÷ 实测纯模型秒，见 daemon/est.mjs）：面板数据源 state.local.session。
+// speed（T16 口径：最佳 Output ÷ 实测纯模型秒，见 daemon/est.mjs）：面板数据源 state.local.session。
 // 本模块经 slotIds:['tps','turnsec'] 提供两个 strip 迷你槽（v5，全读 state.local.lastTurn 最新一轮）
-// ——「tps」= 该轮生成速度 outTps「~N.N tps」（估算带 ~；null → '-- tps'，两种计费口径统一）；
+// ——「tps」= 该轮生成速度 outTps「[~]N.N tps」（估算才带 ~；null → '-- tps'，两种计费口径统一）；
 // 「turnsec」= 该轮耗时 turnSec「N.N s」。标题「吞吐/时长」（模块仍含回合时长面），id 与注册序不变。
-//  - full：「最新一轮 N s」、「平均回合 N s」、「总耗时」、「生成速度 ~N tps · 近30分钟」
-//    （outTps30 = 窗内已配对估算 ÷ 实测秒；null → '-- tps'）、「近30分钟 X cr/min」（仅 credits
+//  - full：「最新一轮 N s」、「平均回合 N s」、「总耗时」、「生成速度 [~]N tps · 近30分钟」
+//    （outTps30 = 窗内已配对最佳输出 ÷ 实测秒；null → '-- tps'）、「近30分钟 X cr/min」（仅 credits
 //    口径）＋ 一行诚实说明（估算口径 + 无日志兜底）；
-//  - half：「均 Ns」紧凑一行；mini（v5）：tps 槽「~N.N tps」/「-- tps」、turnsec 槽「N.N s」/「--」。
+//  - half：「均 Ns」紧凑一行；mini（v5）：tps 槽「[~]N.N tps」/「-- tps」、turnsec 槽「N.N s」/「--」。
 //    旧 state（无 lastTurn 派生字段）→ '-- tps'，绝不抛。
 const speed = {
   id: 'speed',
@@ -936,8 +940,8 @@ const speed = {
   defaultSize: 'full',
   slotIds: ['turnsec', 'tps'],
   // Strip layout v7（2026-10-26 用户裁定：对齐客户端原生底栏）：tps 槽 = 会话近30分钟生成速度
-  // outTps30「⚡ ~N.N t/s」（缺失/非数 → 回落末轮 outTps，仍缺失 → '⚡ -- t/s'，绝不编造 0）；
-  // turnsec 槽 = 末轮耗时 turnSec（一位小数，秒为单位绝无 min；null → '--'）。
+  // outTps30「⚡ [~]N.N t/s」（真值无 ~；缺失/非数 → 回落末轮 outTps，仍缺失 → '⚡ -- t/s'，
+  // 绝不编造 0）；turnsec 槽 = 末轮耗时 turnSec（一位小数，秒为单位绝无 min；null → '--'）。
   renderMini(ctx) {
     const f = fmtOf(ctx);
     const lt = activeLt(ctx && ctx.state); // P3：读活动会话末轮
@@ -945,9 +949,11 @@ const speed = {
       return h('span', 'qum-mini', isNum(lt && lt.turnSec) ? `${f.fmtNum(lt.turnSec, 1)} s` : '--');
     }
     const s = activeSess(ctx && ctx.state);
-    const v = s && isNum(s.outTps30) ? s.outTps30
+    const useSess = s && isNum(s.outTps30);
+    const v = useSess ? s.outTps30
       : lt && isNum(lt.outTps) ? lt.outTps : null;
-    return h('span', 'qum-mini', isNum(v) ? `⚡ ~${f.fmtNum(v, 1)} t/s` : '⚡ -- t/s');
+    const exact = useSess ? s.outTps30Exact === true : lt && lt.outTpsExact === true;
+    return h('span', 'qum-mini', isNum(v) ? `⚡ ${exact ? '' : '~'}${f.fmtNum(v, 1)} t/s` : '⚡ -- t/s');
   },
   render(ctx) {
     const f = fmtOf(ctx);
@@ -965,14 +971,14 @@ const speed = {
       box.append(line('总耗时', f.fmtDur(total)));
       if (tk) {
         const t = s && isNum(s.outTps30) ? s.outTps30 : null;
-        box.append(line('生成速度', tpsText(f, t) + ' · 近30分钟'));
+        box.append(line('生成速度', tpsText(f, t, s && s.outTps30Exact === true) + ' · 近30分钟'));
       } else {
         const t = s ? s.outTps30 : null;
-        box.append(line('生成速度', tpsText(f, t) + ' · 近30分钟'));
+        box.append(line('生成速度', tpsText(f, t, s && s.outTps30Exact === true) + ' · 近30分钟'));
         box.append(withCreditTip(
           line('近30分钟', `${f.fmtCredits(creditShown(s, 'rateCpm30'))} cr/min`), s, 'rateCpm30', f));
       }
-      box.append(h('div', 'qum-note', '生成速度 = 正文估算输出 ÷ 实测纯模型秒（~ 为估算；无日志轮按轮时长扣工具时间）'));
+      box.append(h('div', 'qum-note', '生成速度 = 最佳输出（真值优先，缺失才估算）÷ 实测纯模型秒（~ 为估算；无日志轮按轮时长扣工具时间）'));
     } else {
       box.append(line('均', sec === null ? '--' : `${sec}s`));
     }

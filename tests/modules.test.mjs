@@ -525,7 +525,7 @@ test('speed 吞吐/时长（P2 去重+时长集中）：full 行序 最新一轮
   assert.doesNotMatch(textOf(full), /计费输入/);
   assert.doesNotMatch(textOf(full), /≈/);
   // 诚实注记（T16 口径：正文估算 ÷ 实测纯模型秒）保留；死指标不回归
-  assert.match(findAll(full, 'qum-note').map(textOf).join('|'), /生成速度 = 正文估算输出 ÷ 实测纯模型秒/);
+  assert.match(findAll(full, 'qum-note').map(textOf).join('|'), /生成速度 = 最佳输出（真值优先，缺失才估算）÷ 实测纯模型秒/);
   assert.doesNotMatch(textOf(full), /输入吞吐/);
   assert.doesNotMatch(textOf(full), /174\.8/, '死指标 speedTps 不再出现');
   // half：紧凑「均 Ns」（保持）
@@ -859,6 +859,33 @@ test('tokens 口径：session 本会话 half/full 改真实 token 三明细 + �
     '模型mimo-v2.6-flash (byok)', // T8：mock 目录新增 mimo-v2.6-flash（byok:true）→ 后缀标注
   ]);
   assert.match((await linesOf('session', mock, 'half'))[0], /cr$/);
+});
+
+test('T16 真值优先：outTok/outExact/outTps30Exact=true 时输出与速度不再带 ~（BYOK 真实 output_tokens）', async () => {
+  const st = tokState();
+  const s = st.local.session;
+  s.outTok = 500;           // 真实 output_tokens 合计（outEst 421 是估算，被真值覆盖）
+  s.outExact = true;
+  s.outTps30Exact = true;
+  s.byModel = [{
+    model: 'qoder-custom-f4e/mimo-v2.6-flash', modelName: 'mimo-v2.6-flash', billingMode: 'tokens',
+    credits: null, creditsBillable: null, creditsFree: null, input: 7000, output: 500,
+    cacheRead: 90000, cacheCreate: 1000, billedInput: null, billedSource: null,
+    turns: 1, outTps: 12.3, outTpsExact: true, avgTurnSec: 10,
+  }];
+  const rows = await linesOf('session', st, 'full');
+  assert.ok(rows.includes('输出500 tok'), '真值输出无 ~');
+  assert.ok(rows.includes('生成速度55.8 tps'), '真值速率无 ~');
+  assert.ok(rows.some((r) => r.includes('12.3 tps') && !r.includes('~12.3')), 'byModel 真值速率无 ~');
+  // 混合/估算 → 仍带 ~（outExact=false）
+  s.outExact = false;
+  s.outTps30Exact = false;
+  assert.ok((await linesOf('session', st, 'full')).includes('输出~500 tok'));
+  const { getModules } = await import('../app/widget.js');
+  const def = getModules().find((m) => m.id === 'speed');
+  assert.equal(textOf(def.renderMini({ size: 'mini', slot: 'tps', state: syncActive(st), fmt: {} })), '⚡ ~55.8 t/s');
+  s.outTps30Exact = true;
+  assert.equal(textOf(def.renderMini({ size: 'mini', slot: 'tps', state: syncActive(st), fmt: {} })), '⚡ 55.8 t/s');
 });
 
 test('tokens 口径：consumption 今日行去 cr、tokens 迷你槽读 lastTurn 真实计费输入总量（无 ≈）、credits 槽 -- cr；session 簇切真实 token', async () => {

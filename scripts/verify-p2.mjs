@@ -31,17 +31,19 @@ const logsRoot = () => process.env.QUM_LOGS_DIR || path.join(path.dirname(projec
 
 function listJsonlFiles(root) {
   const out = [];
-  let entries;
-  try { entries = fs.readdirSync(root, { withFileTypes: true }); } catch { return out; }
-  for (const d of entries) {
-    const full = path.join(root, d.name);
-    if (d.isFile() && d.name.endsWith('.jsonl')) out.push(full);
-    else if (d.isDirectory()) {
-      let subs;
-      try { subs = fs.readdirSync(full, { withFileTypes: true }); } catch { continue; }
-      for (const s of subs) if (s.isFile() && s.name.endsWith('.jsonl')) out.push(path.join(full, s.name));
+  const walk = (dir) => {
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const d of entries) {
+      const full = path.join(dir, d.name);
+      if (d.isFile()) {
+        if (d.name.endsWith('.jsonl')) out.push(full);
+      } else if (d.isDirectory()) {
+        walk(full);
+      }
     }
-  }
+  };
+  walk(root);
   return out;
 }
 

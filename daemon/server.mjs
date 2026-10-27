@@ -153,24 +153,26 @@ function listTimingFiles(root) {
 }
 
 /**
- * 收集待扫文件：root 顶层 *.jsonl + root 每个 workspace 子目录的 *.jsonl。
- * 真实布局是 projects/[ws]/[session].jsonl（计划里写作 QUM_PROJECTS_DIR 单层通配）；
- * 顶层文件也纳入以兼容扁平布局与测试 fixture（两者去重键均为文件路径，无重叠）。根目录缺失 → []。
+ * 收集待扫文件：递归遍历 root 下全部 *.jsonl。
+ * 真实布局是 projects/[ws]/[session].jsonl，另有 projects/[ws]/[session]/subagents/*.jsonl
+ * （子代理转录，usage 独立于父会话、uuid 无重叠）——只扫一/两层会漏掉这部分真实用量。
+ * 顶层文件也纳入以兼容扁平布局与测试 fixture；根目录缺失 → []。
  */
 function listJsonlFiles(root) {
   const out = [];
-  let entries;
-  try { entries = fs.readdirSync(root, { withFileTypes: true }); } catch { return out; }
-  for (const d of entries) {
-    const full = path.join(root, d.name);
-    if (d.isFile() && d.name.endsWith('.jsonl')) {
-      out.push(full);
-    } else if (d.isDirectory()) {
-      let subs;
-      try { subs = fs.readdirSync(full, { withFileTypes: true }); } catch { continue; }
-      for (const s of subs) if (s.isFile() && s.name.endsWith('.jsonl')) out.push(path.join(full, s.name));
+  const walk = (dir) => {
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const d of entries) {
+      const full = path.join(dir, d.name);
+      if (d.isFile()) {
+        if (d.name.endsWith('.jsonl')) out.push(full);
+      } else if (d.isDirectory()) {
+        walk(full);
+      }
     }
-  }
+  };
+  walk(root);
   return out;
 }
 

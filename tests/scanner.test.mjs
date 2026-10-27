@@ -257,9 +257,9 @@ test('sessionStats: 多会话取最新活跃（max ts 记录的 sessionId）；c
     turns: 1, rateCpm30: Math.round((0.9 / 30) * 100) / 100, rateCpm30Billable: null, // 0.03
     billedInput: null, avgTurnSec: null, // 记录无 ratio（旧形态）→ null；单回合 <2 gap → null
     model: null, tps30: null, // 无 ctxMeta → model null；窗内无 ratio 记录 → tps30 null
-    billingMode: 'credits', input: 0, output: 0, outEst: 0, cacheRead: 0, cacheCreate: 0, tps30Tokens: 0, // 有 credits → credits 口径；窗内有记录但 token 全零 → 0；outEst=估算（无正文块 → 0）
-    outTps30: null, // T16：窗内无实测模型秒（日志未配对）→ null
-    byModel: [{ model: null, modelName: null, billingMode: 'credits', credits: 0.9, creditsBillable: null, creditsFree: null, input: 0, output: 0, cacheRead: 0, cacheCreate: 0, billedInput: null, billedSource: null, turns: 0, outTps: null, avgTurnSec: null }],
+    billingMode: 'credits', input: 0, output: 0, outEst: 0, outTok: 0, outExact: true, cacheRead: 0, cacheCreate: 0, tps30Tokens: 0, // 有 credits → credits 口径；窗内有记录但 token 全零 → 0；outEst=估算（无正文块 → 0）
+    outTps30: null, outTps30Exact: null, // T16：窗内无实测模型秒（日志未配对）→ null
+    byModel: [{ model: null, modelName: null, billingMode: 'credits', credits: 0.9, creditsBillable: null, creditsFree: null, input: 0, output: 0, cacheRead: 0, cacheCreate: 0, billedInput: null, billedSource: null, turns: 0, outTps: null, outTpsExact: null, avgTurnSec: null }],
     totalTurnSec: null,
     // 原生样式数据面：无 prompt → 0 轮；无 rid → 每条 usage 各计 1 次请求；无真实 cache token → null
     rounds: 0, requests: 1, cacheHitRate: null, firstTs: now - 5 * 60_000, lastTs: now - 5 * 60_000,
@@ -277,10 +277,10 @@ test('sessionStats: 无 sessionId 记录（含旧缓存 undefined）不参与 id
     { ts: now - 3 * 60_000, uuid: 'y1', ...base, sessionId: 'S-a', credits: 0.4 },
     { ts: now - 40 * 60_000, uuid: 'y2', ...base, sessionId: 'S-a', credits: 0.6 }, // 窗外：计入 credits，不计入速率
   ];
-  assert.deepEqual(sessionStats(recs, now), { id: 'S-a', credits: 1, creditsBillable: null, creditsFree: null, turns: 2, rateCpm30: Math.round((0.4 / 30) * 100) / 100, rateCpm30Billable: null, billedInput: null, avgTurnSec: null, model: null, tps30: null, billingMode: 'credits', input: 0, output: 0, outEst: 0, cacheRead: 0, cacheCreate: 0, tps30Tokens: 0, outTps30: null, byModel: [{ model: null, modelName: null, billingMode: 'credits', credits: 1, creditsBillable: null, creditsFree: null, input: 0, output: 0, cacheRead: 0, cacheCreate: 0, billedInput: null, billedSource: null, turns: 0, outTps: null, avgTurnSec: null }], totalTurnSec: null, rounds: 0, requests: 2, cacheHitRate: null, firstTs: now - 40 * 60_000, lastTs: now - 3 * 60_000, outEstThk: 0, outEstTxt: 0, outEstCall: 0, tools: { calls: 0, errors: 0, byName: [] }, edits: null }); // 0.4/30→0.01；gap 37min>30min 剔为 idle → 合格 gap<2 → null；窗内 output 全零 → outTps30 null
+  assert.deepEqual(sessionStats(recs, now), { id: 'S-a', credits: 1, creditsBillable: null, creditsFree: null, turns: 2, rateCpm30: Math.round((0.4 / 30) * 100) / 100, rateCpm30Billable: null, billedInput: null, avgTurnSec: null, model: null, tps30: null, billingMode: 'credits', input: 0, output: 0, outEst: 0, outTok: 0, outExact: true, cacheRead: 0, cacheCreate: 0, tps30Tokens: 0, outTps30: null, outTps30Exact: null, byModel: [{ model: null, modelName: null, billingMode: 'credits', credits: 1, creditsBillable: null, creditsFree: null, input: 0, output: 0, cacheRead: 0, cacheCreate: 0, billedInput: null, billedSource: null, turns: 0, outTps: null, outTpsExact: null, avgTurnSec: null }], totalTurnSec: null, rounds: 0, requests: 2, cacheHitRate: null, firstTs: now - 40 * 60_000, lastTs: now - 3 * 60_000, outEstThk: 0, outEstTxt: 0, outEstCall: 0, tools: { calls: 0, errors: 0, byName: [] }, edits: null }); // 0.4/30→0.01；gap 37min>30min 剔为 idle → 合格 gap<2 → null；窗内 output 全零 → outTps30 null
   // 全池都没有 sessionId → 等同空输入（诚实降级：不知道"本会话"是谁）
   assert.deepEqual(sessionStats([{ ts: now, uuid: 'z', ...base, credits: 1 }], now),
-    { id: null, credits: null, creditsBillable: null, creditsFree: null, turns: 0, rateCpm30: null, rateCpm30Billable: null, billedInput: null, avgTurnSec: null, model: null, tps30: null, billingMode: null, input: 0, output: 0, outEst: null, cacheRead: 0, cacheCreate: 0, tps30Tokens: null, outTps30: null, byModel: [], totalTurnSec: null, rounds: 0, requests: 0, cacheHitRate: null, firstTs: null, lastTs: null, outEstThk: 0, outEstTxt: 0, outEstCall: 0, tools: { calls: 0, errors: 0, byName: [] }, edits: null });
+    { id: null, credits: null, creditsBillable: null, creditsFree: null, turns: 0, rateCpm30: null, rateCpm30Billable: null, billedInput: null, avgTurnSec: null, model: null, tps30: null, billingMode: null, input: 0, output: 0, outEst: null, outTok: null, outExact: null, cacheRead: 0, cacheCreate: 0, tps30Tokens: null, outTps30: null, outTps30Exact: null, byModel: [], totalTurnSec: null, rounds: 0, requests: 0, cacheHitRate: null, firstTs: null, lastTs: null, outEstThk: 0, outEstTxt: 0, outEstCall: 0, tools: { calls: 0, errors: 0, byName: [] }, edits: null });
 });
 
 test('sessionStats: 速率窗口 ts > now-30min 严格排他（恰 30 分钟整不计），速率 = Σ/30 round2', () => {
@@ -316,7 +316,7 @@ test('sessionStats: credits round2 消 float drift；turns 按 uuid 去重后计
 
 test('sessionStats: 空输入 → {id:null, credits:null, turns:0, rateCpm30:null, billedInput:null, avgTurnSec:null, model:null, tps30:null}；不修改入参', () => {
   const now = Date.now();
-  assert.deepEqual(sessionStats([], now), { id: null, credits: null, creditsBillable: null, creditsFree: null, turns: 0, rateCpm30: null, rateCpm30Billable: null, billedInput: null, avgTurnSec: null, model: null, tps30: null, billingMode: null, input: 0, output: 0, outEst: null, cacheRead: 0, cacheCreate: 0, tps30Tokens: null, outTps30: null, byModel: [], totalTurnSec: null, rounds: 0, requests: 0, cacheHitRate: null, firstTs: null, lastTs: null, outEstThk: 0, outEstTxt: 0, outEstCall: 0, tools: { calls: 0, errors: 0, byName: [] }, edits: null });
+  assert.deepEqual(sessionStats([], now), { id: null, credits: null, creditsBillable: null, creditsFree: null, turns: 0, rateCpm30: null, rateCpm30Billable: null, billedInput: null, avgTurnSec: null, model: null, tps30: null, billingMode: null, input: 0, output: 0, outEst: null, outTok: null, outExact: null, cacheRead: 0, cacheCreate: 0, tps30Tokens: null, outTps30: null, outTps30Exact: null, byModel: [], totalTurnSec: null, rounds: 0, requests: 0, cacheHitRate: null, firstTs: null, lastTs: null, outEstThk: 0, outEstTxt: 0, outEstCall: 0, tools: { calls: 0, errors: 0, byName: [] }, edits: null });
   const recs = [{ ts: now, uuid: 'k', input: 0, output: 0, cacheRead: 0, cacheCreate: 0, credits: 1, sub: false }];
   const before = recs.map((r) => r.uuid);
   sessionStats(recs, now);
@@ -481,7 +481,7 @@ test('sessionStats billedInput: ctxWindows 兜底 200000 与缺 map 同值；旧
   // 迁移主场景：升级前 scan-cache 记录既无 ratio 字段也无 sessionId → 一切 null，绝不抛/绝不 NaN
   const legacy = [{ ts: now - 60_000, uuid: 'L', ...base }];
   const l = sessionStats(legacy, now, new Map());
-  assert.deepEqual(l, { id: null, credits: null, creditsBillable: null, creditsFree: null, turns: 0, rateCpm30: null, rateCpm30Billable: null, billedInput: null, avgTurnSec: null, model: null, tps30: null, billingMode: null, input: 0, output: 0, outEst: null, cacheRead: 0, cacheCreate: 0, tps30Tokens: null, outTps30: null, byModel: [], totalTurnSec: null, rounds: 0, requests: 0, cacheHitRate: null, firstTs: null, lastTs: null, outEstThk: 0, outEstTxt: 0, outEstCall: 0, tools: { calls: 0, errors: 0, byName: [] }, edits: null });
+  assert.deepEqual(l, { id: null, credits: null, creditsBillable: null, creditsFree: null, turns: 0, rateCpm30: null, rateCpm30Billable: null, billedInput: null, avgTurnSec: null, model: null, tps30: null, billingMode: null, input: 0, output: 0, outEst: null, outTok: null, outExact: null, cacheRead: 0, cacheCreate: 0, tps30Tokens: null, outTps30: null, outTps30Exact: null, byModel: [], totalTurnSec: null, rounds: 0, requests: 0, cacheHitRate: null, firstTs: null, lastTs: null, outEstThk: 0, outEstTxt: 0, outEstCall: 0, tools: { calls: 0, errors: 0, byName: [] }, edits: null });
 });
 
 // ---------------------------------------------------------------- T13+：模型名 + 输入吞吐（tps）+ 会话明细
@@ -576,7 +576,7 @@ test('sessionsSummary: 按 lastTs 降序、逐会话字段（credits round2 / bi
     billedInput: Math.round(0.25 * 200000), billedSource: 'fallback200k', // 50000（window null 兜底）
     turns: 2, rounds: 0, requests: 2, lastTs: t(5), avgTurnSec: null, // 2 条 → 1 gap <2 → null
     billingMode: 'credits', input: 0, output: 0, cacheRead: 0, cacheCreate: 0,
-    byModel: [{ model: null, modelName: null, billingMode: 'credits', credits: 0.8, creditsBillable: null, creditsFree: null, input: 0, output: 0, cacheRead: 0, cacheCreate: 0, billedInput: Math.round(0.25 * 200000), billedSource: 'fallback200k', turns: 0, outTps: null, avgTurnSec: null }],
+    byModel: [{ model: null, modelName: null, billingMode: 'credits', credits: 0.8, creditsBillable: null, creditsFree: null, input: 0, output: 0, cacheRead: 0, cacheCreate: 0, billedInput: Math.round(0.25 * 200000), billedSource: 'fallback200k', turns: 0, outTps: null, outTpsExact: null, avgTurnSec: null }],
   });
   assert.deepEqual(rows[1], {
     id: 'S-A', model: 'qfmodel', credits: 0.5,
@@ -584,14 +584,14 @@ test('sessionsSummary: 按 lastTs 降序、逐会话字段（credits round2 / bi
     billedInput: Math.round(0.5 * 180000), billedSource: 'runtime-config', // 90000
     turns: 1, rounds: 0, requests: 1, lastTs: t(50), avgTurnSec: null,
     billingMode: 'credits', input: 0, output: 0, cacheRead: 0, cacheCreate: 0,
-    byModel: [{ model: null, modelName: null, billingMode: 'credits', credits: 0.5, creditsBillable: null, creditsFree: null, input: 0, output: 0, cacheRead: 0, cacheCreate: 0, billedInput: Math.round(0.5 * 180000), billedSource: 'runtime-config', turns: 0, outTps: null, avgTurnSec: null }],
+    byModel: [{ model: null, modelName: null, billingMode: 'credits', credits: 0.5, creditsBillable: null, creditsFree: null, input: 0, output: 0, cacheRead: 0, cacheCreate: 0, billedInput: Math.round(0.5 * 180000), billedSource: 'runtime-config', turns: 0, outTps: null, outTpsExact: null, avgTurnSec: null }],
   });
   assert.deepEqual(rows[2], {
     id: 'S-C', model: null, credits: 1.25, creditsBillable: null, creditsFree: null,
     billedInput: null, billedSource: null,
     turns: 1, rounds: 0, requests: 1, lastTs: t(120), avgTurnSec: null,
     billingMode: 'credits', input: 0, output: 0, cacheRead: 0, cacheCreate: 0,
-    byModel: [{ model: null, modelName: null, billingMode: 'credits', credits: 1.25, creditsBillable: null, creditsFree: null, input: 0, output: 0, cacheRead: 0, cacheCreate: 0, billedInput: null, billedSource: null, turns: 0, outTps: null, avgTurnSec: null }],
+    byModel: [{ model: null, modelName: null, billingMode: 'credits', credits: 1.25, creditsBillable: null, creditsFree: null, input: 0, output: 0, cacheRead: 0, cacheCreate: 0, billedInput: null, billedSource: null, turns: 0, outTps: null, outTpsExact: null, avgTurnSec: null }],
   });
   // avgTurnSec：≥2 合格 gap 才出值（同 sessionStats 口径，>30min 剔 idle）
   const gaps = [
@@ -731,7 +731,7 @@ test('T2 buildTurns: prompt 开段/末段收尾；首 prompt 前缀不产轮；�
   assert.equal(sub[0].turnSec, 76.1);
 });
 
-test('T2 lastTurnOf: 取过滤后集合（usage）max-ts 会话的末轮；credits/四元组求和；model=末条字面；billingMode 末向前回退；outTps = 估算÷实测秒（配对合并/兜底）', () => {
+test('T2 lastTurnOf: 取过滤后集合（usage）max-ts 会话的末轮；credits/四元组求和；model=末条字面；billingMode 末向前回退；outTps = 真值优先÷实测秒（配对合并/兜底）', () => {
   const recs = [
     { kind: 'prompt', ts: t2min(0), uuid: 'pa', sessionId: 'S-old' },
     { kind: 'usage', ts: t2min(1), uuid: 'oa', sessionId: 'S-old', input: 1, output: 1, cacheRead: 0, cacheCreate: 0, sub: false, credits: 9.9, model: 'oldmodel' },
@@ -752,8 +752,11 @@ test('T2 lastTurnOf: 取过滤后集合（usage）max-ts 会话的末轮；credi
   // billedOf：ratio 0.3 × 200000 = 60000（nb2 无 ratio 不计）→ billedSource runtime-config
   assert.equal(lt.billedInput, 60000);
   assert.equal(lt.billedSource, 'runtime-config');
-  // outTps（T16）：分子 900+900 = 1800 估算；分母 = 重叠区间合并 30s（夹轮墙钟内）→ 60
-  assert.equal(lt.outTps, 60);
+  // outTps（T16）：分子 10+20 = 30 真值（output_tokens > 0，不估）；分母 = 重叠区间合并 30s → 1
+  assert.equal(lt.outTok, 30);
+  assert.equal(lt.outExact, true);
+  assert.equal(lt.outTps, 1);
+  assert.equal(lt.outTpsExact, true);
   assert.equal(lt.model, 'qfmodel');
   assert.equal(lt.modelName, null, 'modelName 由 server decorate 解析，scanner 层恒 null');
   // 全池无 prompt → null
@@ -791,7 +794,7 @@ test('T2 lastTurnOf: 取过滤后集合（usage）max-ts 会话的末轮；credi
 });
 
 // ---- T3：byModelOf 会话内按模型聚合 ----
-test('T3 byModelOf: 轮参与 Set 去重；credits 求和/全 null→null；outTps = 估算÷实测秒（仅配对记录）；默认序 credits 降→turns 降→model 升', () => {
+test('T3 byModelOf: 轮参与 Set 去重；credits 求和/全 null→null；outTps = 真值优先÷实测秒（仅配对记录）；默认序 credits 降→turns 降→model 升', () => {
   const now = new Date(2026, 9, 10, 12, 0, 0).getTime();
   const recs = [
     { kind: 'prompt', ts: now - 10 * 60_000, uuid: 'p1', sessionId: 'S' },
@@ -809,13 +812,15 @@ test('T3 byModelOf: 轮参与 Set 去重；credits 求和/全 null→null；outT
   assert.equal(B.input, 150); assert.equal(B.output, 50);
   assert.equal(B.turns, 1, '同轮同模型两条记录只计 1 轮');
   assert.equal(B.avgTurnSec, 120, '单轮均值即该轮（p1→u2 120s）');
-  assert.equal(B.outTps, 20, '估算 300+300 ÷ 配对秒 10+20 = 600/30 = 20');
+  assert.equal(B.outTps, 1.7, '真值 30+20 ÷ 配对秒 10+20 = 50/30 = 1.7');
+  assert.equal(B.outTpsExact, true);
   assert.equal(B.billedInput, null, '无 ratio 记录 → null');
   const A = rows[1];
   assert.equal(A.credits, null, '全 null 诚实读数');
   assert.equal(A.turns, 1);
   assert.equal(A.avgTurnSec, 60, 'p2→u3 60s 单轮');
   assert.equal(A.outTps, null, '有估算但无配对日志 → null（模型组不兜底）');
+  assert.equal(A.outTpsExact, null);
 });
 
 test('T3 回归: credits 原值求和后一次 round2（逐条 round2 会漂移，且 byModel 各行之和对不上 session 合计）', () => {
@@ -875,12 +880,14 @@ test('T4 byModelWindowOf: 今日/7日双列；窗内轮参与（endTs≥windowSt
   assert.equal(A.input, 400); assert.equal(A.output, 40);
   assert.equal(A.turns, 2, '轮2+轮3 各计 1（轮1 endTs 越窗排除）');
   assert.equal(A.avgTurnSec, 120, '(60s+180s)/2');
-  assert.equal(A.outTps, 50, 'T16：估算 500+500 ÷ 配对秒 10+10 = 1000/20 = 50');
+  assert.equal(A.outTps, 2, 'T16：真值 10+30 ÷ 配对秒 10+10 = 40/20 = 2');
+  assert.equal(A.outTpsExact, true);
   assert.equal(A.billedInput, null);
   const B = bw.rows[1];
   assert.equal(B.credits7d, 1); assert.equal(B.creditsToday, 1);
   assert.equal(B.turns, 1); assert.equal(B.avgTurnSec, 180, '单轮即 p2→a3 180s');
-  assert.equal(B.outTps, 10, 'T16：估算 50 ÷ 配对秒 5 = 10');
+  assert.equal(B.outTps, 1, 'T16：真值 5 ÷ 配对秒 5 = 1');
+  assert.equal(B.outTpsExact, true);
   assert.deepEqual(byModelWindowOf([], new Map(), now), { windowStart, todayStart, rows: [] });
 });
 

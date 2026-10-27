@@ -28,7 +28,7 @@ export const LAYOUT_STORAGE_KEY = 'qum.layout.v1';
 export const COLLAPSED_STORAGE_KEY = 'qum.collapsed.v1';
 // P2 一级折叠：只存“折叠(true)”的模块 id，展开即删键；缺省/脏值 → 全展开（fail-open）。
 // Strip layout v7（2026-10-26 用户裁定：对齐客户端原生底栏，接替 v6）：单行六槽 =
-// 会话生成速度 tps（⚡ ~N.N t/s）+ 资源包剩余 quota（◔ N%）+ 会话簇 session（[≈]N万 tok ·
+// 会话生成速度 tps（⚡ [~]N.N t/s；估算才带 ~）+ 资源包剩余 quota（◔ N%）+ 会话簇 session（[≈]N万 tok ·
 // 命中% · 轮 · 请求）+ 工具/失败 tools + 会话累计 credits + 末轮耗时 turnsec。悬停出摘要卡
 // （精确千分位），点击仍打开完整面板。v7 哨兵：每槽可迷你 且 含 session/tools/credits 且
 // 不含 model——v4/v5（含 model）/v6（缺 session/tools）存档 → 整条回落 v7 默认。
@@ -868,9 +868,12 @@ function renderHover() {
   let inVal = `${approx && isFiniteNum(inp) ? '≈' : ''}${n(inp)} tok`;
   if (s && isFiniteNum(s.cacheHitRate)) inVal += ` · 命中 ${fmtPct(s.cacheHitRate)}`;
   rows.push(hoverRow(doc, '输入', inVal));
-  // 输出：三段估算总输出（~），思考 tokens 仅 >0 时出段（不补 0）。
-  let outVal = s && isFiniteNum(s.outEst) ? `~${n(s.outEst)} tok` : '--';
-  if (s && isFiniteNum(s.outEstThk) && s.outEstThk > 0) outVal += ` · 思考 ${n(s.outEstThk)}`;
+  // 输出：最佳值（usage 真值优先，缺失才用三段估算）——全真值不带 ~，估算/混合带 ~；
+  // 思考 tokens 仅在估算参与时出段（不补 0）。
+  const outBest = s && isFiniteNum(s.outTok) ? s.outTok : s && isFiniteNum(s.outEst) ? s.outEst : null;
+  const outExact = !!(s && isFiniteNum(s.outTok) && s.outExact === true);
+  let outVal = outBest !== null ? `${outExact ? '' : '~'}${n(outBest)} tok` : '--';
+  if (!outExact && s && isFiniteNum(s.outEstThk) && s.outEstThk > 0) outVal += ` · 思考 ${n(s.outEstThk)}`;
   rows.push(hoverRow(doc, '输出', outVal));
   // 用量：credits 与 tokens 并列展示，两口径绝不折算（tokens 口径无 credits → 只出 tokens）。
   // credits 主数字 = 账户实扣（creditsBillable）；旧记录未标注 billable → 回落名义值。

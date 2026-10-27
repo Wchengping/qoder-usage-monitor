@@ -142,6 +142,7 @@
       "modelName": null,
       "tps30": 12300,
       "outTps30": 45.6,
+      "outTps30Exact": false,
       "totalTurnSec": 262,
       "byModel": [
         {
@@ -157,6 +158,7 @@
           "billedSource": "fallback200k",
           "turns": 3,
           "outTps": 56.5,
+          "outTpsExact": false,
           "avgTurnSec": 66,
           "creditsBillable": null,
           "creditsFree": null
@@ -174,6 +176,7 @@
           "billedSource": null,
           "turns": 1,
           "outTps": 46,
+          "outTpsExact": false,
           "avgTurnSec": 41,
           "creditsBillable": null,
           "creditsFree": null
@@ -185,6 +188,8 @@
       "firstTs": 1791518400000,
       "lastTs": 1791604800000,
       "outEst": 94,
+      "outTok": 94,
+      "outExact": false,
       "outEstThk": 25,
       "outEstTxt": 49,
       "outEstCall": 20,
@@ -242,11 +247,14 @@
       "credits": 0.6,
       "input": 0,
       "output": 0,
+      "outTok": 94,
+      "outExact": false,
       "cacheRead": 0,
       "cacheCreate": 0,
       "billedInput": 48123,
       "billedSource": "fallback200k",
       "outTps": 56.5,
+      "outTpsExact": false,
       "creditsBillable": null,
       "creditsFree": null
     },
@@ -268,6 +276,7 @@
           "billedSource": null,
           "turns": 63,
           "outTps": 52.5,
+          "outTpsExact": false,
           "avgTurnSec": 63,
           "creditsTodayBillable": null,
           "credits7dBillable": null,
@@ -288,6 +297,7 @@
           "billedSource": "runtime-config",
           "turns": 22,
           "outTps": 48.2,
+          "outTpsExact": false,
           "avgTurnSec": 71,
           "creditsTodayBillable": null,
           "credits7dBillable": null,
@@ -308,6 +318,7 @@
           "billedSource": "runtime-config",
           "turns": 9,
           "outTps": 44.1,
+          "outTpsExact": false,
           "avgTurnSec": 88,
           "creditsTodayBillable": null,
           "credits7dBillable": null,
@@ -328,6 +339,7 @@
           "billedSource": "fallback200k",
           "turns": 4,
           "outTps": 39.8,
+          "outTpsExact": false,
           "avgTurnSec": 74,
           "creditsTodayBillable": null,
           "credits7dBillable": null,
@@ -348,6 +360,7 @@
           "billedSource": null,
           "turns": 5,
           "outTps": 46,
+          "outTpsExact": false,
           "avgTurnSec": 41,
           "creditsTodayBillable": null,
           "credits7dBillable": null,
@@ -369,11 +382,14 @@
         "credits": 0.6,
         "input": 0,
         "output": 0,
+        "outTok": 94,
+        "outExact": false,
         "cacheRead": 0,
         "cacheCreate": 0,
         "billedInput": 48123,
         "billedSource": "fallback200k",
-        "outTps": 56.5
+        "outTps": 56.5,
+        "outTpsExact": false
       },
       "session": {
         "id": "mock-session-abc123",
@@ -386,6 +402,7 @@
         "modelName": null,
         "tps30": 12300,
         "outTps30": 45.6,
+        "outTps30Exact": false,
         "totalTurnSec": 262,
         "byModel": [
           {
@@ -401,6 +418,7 @@
             "billedSource": "fallback200k",
             "turns": 3,
             "outTps": 56.5,
+            "outTpsExact": false,
             "avgTurnSec": 66,
             "creditsBillable": null,
             "creditsFree": null
@@ -418,6 +436,7 @@
             "billedSource": null,
             "turns": 1,
             "outTps": 46,
+            "outTpsExact": false,
             "avgTurnSec": 41,
             "creditsBillable": null,
             "creditsFree": null
@@ -429,6 +448,8 @@
         "firstTs": 1791518400000,
         "lastTs": 1791604800000,
         "outEst": 94,
+        "outTok": 94,
+        "outExact": false,
         "outEstThk": 25,
         "outEstTxt": 49,
         "outEstCall": 20,
@@ -493,6 +514,7 @@
             "billedSource": "fallback200k",
             "turns": 3,
             "outTps": 56.5,
+            "outTpsExact": false,
             "avgTurnSec": 66,
             "creditsBillable": null,
             "creditsFree": null
@@ -510,6 +532,7 @@
             "billedSource": null,
             "turns": 1,
             "outTps": 46,
+            "outTpsExact": false,
             "avgTurnSec": 41,
             "creditsBillable": null,
             "creditsFree": null
@@ -544,6 +567,7 @@
             "billedSource": "runtime-config",
             "turns": 30,
             "outTps": 44,
+            "outTpsExact": false,
             "avgTurnSec": 62,
             "creditsBillable": null,
             "creditsFree": null
