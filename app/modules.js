@@ -390,7 +390,14 @@ function catalogEntries(state) {
   return cat && Array.isArray(cat.entries) ? cat.entries : [];
 }
 
-/** 目录中匹配 model id 的条目（精确 modelKey → 斜杠后缀/前缀，含反向；与 daemon resolveModelName 同规）。 */
+/** 显示名归一化：小写 + 去所有非字母数字（'Mimo-V2.6-Flash' → 'mimov26flash'）。 */
+function normNameOf(s) {
+  return typeof s === 'string' ? s.toLowerCase().replace(/[^a-z0-9]+/g, '') : '';
+}
+
+/** 目录中匹配 model id 的条目（精确 modelKey → 斜杠后缀/前缀，含反向；与 daemon resolveModelName 同规）。
+ * 2026-10-28：BYOK 会话 id 是 `qoder-custom-<provider-uuid>/<slug>`，目录 key 是 `byok:<model-uuid>`
+ * （两个 uuid 不同）——最后用 slug 与显示名归一化兜底；歧义（多个不同显示名）不猜。 */
 function catalogEntryFor(state, id) {
   if (typeof id !== 'string' || !id) return null;
   const entries = catalogEntries(state);
@@ -402,12 +409,25 @@ function catalogEntryFor(state, id) {
     if (e.modelKey.endsWith('/' + id) || e.modelKey.startsWith(id + '/')
       || id.endsWith('/' + e.modelKey) || id.startsWith(e.modelKey + '/')) return e;
   }
-  return null;
+  const slash = id.lastIndexOf('/');
+  if (slash <= 0 || slash === id.length - 1) return null;
+  const slug = normNameOf(id.slice(slash + 1));
+  if (slug.length < 5) return null;
+  let hit = null;
+  for (const e of entries) {
+    if (!e || typeof e !== 'object' || typeof e.modelDisplayName !== 'string' || !e.modelDisplayName) continue;
+    if (normNameOf(e.modelDisplayName) !== slug) continue;
+    if (hit && hit.modelDisplayName !== e.modelDisplayName) return null; // 歧义 → 不猜
+    hit = e;
+  }
+  return hit;
 }
 
 /**
  * 模型显示文本（T14 display policy，模块层）：
  *   解析名（server 落盘 modelName，非空串）→ 自身；
+ *   否则目录命中显示名（旧 daemon/未解析行兜底）→ 该显示名；
+ *   否则 BYOK 自定义 id（`qoder-custom-<uuid>/<slug>`）→ 完整 slug（绝不截断成 id:qoder-cu）；
  *   否则原始 id 为短句柄（/^[a-z][a-z0-9._-]{1,20}$/i）→ 自身（如 'qfmodel'）；
  *   否则有 id → `id:<前8>`（明确标注这是 id 而非名字）；无 id → null（呈现 '--'）。
  * 目的：绝不把 'qoder-custom-f' 式中段截断的原始 id 当模型名。
@@ -417,12 +437,19 @@ function modelDisplay(state, session) {
   if (name) return name;
   const id = session && typeof session.model === 'string' ? session.model : null;
   if (!id) return null;
+  const entry = catalogEntryFor(state, id);
+  if (entry && typeof entry.modelDisplayName === 'string' && entry.modelDisplayName) return entry.modelDisplayName;
+  const custom = /^qoder-custom-[^/]+\/(.+)$/.exec(id);
+  if (custom) return custom[1]; // BYOK 自定义模型：slug 是用户自己的命名，完整显示
   return MODEL_HANDLE_RE.test(id) ? id : 'id:' + id.slice(0, 8);
 }
 
-/** 该会话模型对应目录条目是否 byok:true（「(byok)」标注依据）。 */
+/** 该会话模型是否 BYOK：`qoder-custom-` 前缀即自定义 provider（client 日志 provider="custom"），
+ *  或目录条目 byok:true（2026-10-28：目录 key 为 byok:<uuid>，归一化规则同上）。 */
 function modelByok(state, session) {
-  const e = catalogEntryFor(state, session && session.model);
+  const id = session && typeof session.model === 'string' ? session.model : '';
+  if (id.startsWith('qoder-custom-')) return true;
+  const e = catalogEntryFor(state, id);
   return !!(e && e.byok === true);
 }
 

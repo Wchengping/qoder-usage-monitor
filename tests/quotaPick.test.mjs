@@ -342,6 +342,31 @@ test('resolveModelName: 斜杠后缀/前缀匹配（modelKey 形如 <vendor>/<id
   assert.equal(resolveModelName('model', [{ modelKey: 'a/modelx', modelDisplayName: 'X' }]), null);
 });
 
+test('resolveModelName: BYOK <provider>/<slug> 按目录显示名归一化命中（真机 2026-10-28：byok:<uuid> 与 provider uuid 不同）', () => {
+  const cat = { entries: [
+    { modelKey: 'byok:cccccccc-cccc-4ccc-8ccc-cccccccccccc', modelDisplayName: 'Mimo-V2.6-Flash', byok: true },
+    { modelKey: 'byok:dddddddd-dddd-4ddd-8ddd-dddddddddddd', modelDisplayName: 'Mimo-V2.6-Pro', byok: true },
+    { modelKey: 'dfmodel', modelDisplayName: 'DeepSeek-Flash', byok: false },
+  ] };
+  assert.equal(
+    resolveModelName('qoder-custom-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb/mimo-v2.6-flash', cat),
+    'Mimo-V2.6-Flash');
+  assert.equal(
+    resolveModelName('qoder-custom-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb/mimo-v2.6-pro', cat),
+    'Mimo-V2.6-Pro');
+  // 目录已删除的 BYOK 模型（step-*）没有显示名 → null；由呈现层回落完整 slug
+  assert.equal(resolveModelName('qoder-custom-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/step-5-preview', cat), null);
+  // 归一化后同名但显示文本不同 → 不猜（歧义 → null）
+  const amb = [
+    { modelKey: 'byok:a', modelDisplayName: 'Mimo V2.6 Flash', byok: true },
+    { modelKey: 'byok:b', modelDisplayName: 'Mimo-V2.6-Flash', byok: true },
+  ];
+  assert.equal(resolveModelName('qoder-custom-x/mimo-v2.6-flash', amb), null);
+  // 精确/斜杠命中优先于归一化（同一 id 两种规则都可命中时取前面规则）
+  const both = [{ modelKey: 'qoder-custom-x/mimo-v2.6-flash', modelDisplayName: 'Slash Exact', byok: true }];
+  assert.equal(resolveModelName('qoder-custom-x/mimo-v2.6-flash', both), 'Slash Exact');
+});
+
 test('resolveModelName: 未命中/乱输入 → null，绝不抛（非字符串 id、非数组目录、废条目）', () => {
   const cat = [{ modelKey: 'qoder/qfmodel', modelDisplayName: 'Qoder Model' }];
   assert.equal(resolveModelName('nope', cat), null);

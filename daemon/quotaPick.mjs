@@ -332,7 +332,8 @@ export function pickHeatmap(raw) {
 //
 // resolveModelName(modelId, catalog)：精确 modelKey 命中 → modelDisplayName；否则 catalog 里
 // 某条 modelKey 以 `'/'+modelId` 结尾或以 `modelId+'/'` 开头 → 该条 modelDisplayName；
-// 否则 null。catalog 接受数组或 {entries:[…]} 对象形态；纯函数、零 IO、绝不抛。
+// 最后按「斜杠后 slug vs 显示名归一化」兜底（BYOK byok:<uuid> ≠ provider uuid，见下）；
+// 仍无 → null。catalog 接受数组或 {entries:[…]} 对象形态；纯函数、零 IO、绝不抛。
 // display policy 属呈现层（app/modules.js）：resolved ?? （短句柄 → 自身） ?? `id:${id.slice(0,8)}`。
 
 /** 取目录条目数组：入参为数组 → 自身；为 {entries:[…]} → entries；其余 → []。 */
@@ -346,6 +347,31 @@ function catalogArray(catalog) {
 function displayOf(entry) {
   return entry && typeof entry === 'object' && typeof entry.modelDisplayName === 'string' && entry.modelDisplayName
     ? entry.modelDisplayName : null;
+}
+
+/** 显示名归一化：小写 + 去所有非字母数字（'Mimo-V2.6-Flash' → 'mimov26flash'）。 */
+function normName(s) {
+  return typeof s === 'string' ? s.toLowerCase().replace(/[^a-z0-9]+/g, '') : '';
+}
+
+/**
+ * 归一化显示名兜底（2026-10-28 真机）：BYOK 会话 model 形如
+ * `qoder-custom-<provider-uuid>/<slug>`，而目录条目的 modelKey 是 `byok:<model-uuid>`
+ * ——两个 uuid 不同，精确/斜杠规则都命中不了。此时用最后一段 slug 与目录显示名归一化比较
+ * （'mimo-v2.6-flash' == 'Mimo-V2.6-Flash'）。仅对含斜杠的 id 生效、slug 至少 5 个字符；
+ * 归一化后对应多个不同显示名 → 不猜，返回 null。
+ */
+function matchNormalizedDisplay(modelId, entries) {
+  const slash = modelId.lastIndexOf('/');
+  if (slash <= 0 || slash === modelId.length - 1) return null;
+  const slug = normName(modelId.slice(slash + 1));
+  if (slug.length < 5) return null;
+  const names = new Set();
+  for (const e of entries) {
+    const d = displayOf(e);
+    if (d !== null && normName(d) === slug) names.add(d);
+  }
+  return names.size === 1 ? [...names][0] : null;
 }
 
 /** 见上注。纯函数，绝不抛。 */
@@ -371,7 +397,7 @@ export function resolveModelName(modelId, catalog) {
       if (d !== null) return d;
     }
   }
-  return null;
+  return matchNormalizedDisplay(modelId, entries);
 }
 
 /**

@@ -413,6 +413,41 @@ test('session 模型行 byok 标注：session id=<profile>/<key> 反向命中目
   assert.equal(modelRow(st2), '模型X');
 });
 
+test('session 模型行：BYOK <provider>/<slug> 无目录名 → 完整 slug + (byok)，绝不截成 id:qoder-cu', async () => {
+  const { getModules } = await import('../app/widget.js');
+  const def = getModules().find((m) => m.id === 'session');
+  const modelRow = (state) => findAll(def.render({ size: 'full', state: syncActive(state), fmt: {} }), 'qum-line').map(textOf)[4];
+  // 真机 2026-10-28：step-* 已从目录删除，只剩 provider 前缀 + slug；显示完整 slug 才是诚实读数
+  const st = withSession({
+    model: 'qoder-custom-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/step-5-preview',
+    modelName: null,
+  });
+  assert.equal(modelRow(st), '模型step-5-preview (byok)');
+});
+
+test('session/byModel 模型行：目录 key 为 byok:<uuid> 时按显示名归一化解析并标 (byok)（真机 uuid 与 provider 不同）', async () => {
+  const { getModules } = await import('../app/widget.js');
+  const def = getModules().find((m) => m.id === 'session');
+  const lines = (state) => findAll(def.render({ size: 'full', state: syncActive(state), fmt: {} }), 'qum-line').map(textOf);
+  const st = {
+    ...withSession({
+      model: 'qoder-custom-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb/mimo-v2.6-flash',
+      modelName: null,
+      byModel: [{
+        model: 'qoder-custom-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb/mimo-v2.6-flash',
+        modelName: null, billingMode: 'credits', credits: 1.5, turns: 2,
+      }],
+    }),
+    modelCatalog: {
+      fetchedAt: 1,
+      entries: [{ modelKey: 'byok:cccccccc-cccc-4ccc-8ccc-cccccccccccc', modelDisplayName: 'Mimo-V2.6-Flash', typeDisplayName: null, byok: true }],
+    },
+  };
+  const ls = lines(st);
+  assert.equal(ls[4], '模型Mimo-V2.6-Flash (byok)'); // 目录显示名（归一大写/连字符差异）
+  assert.match(ls[5], /^Mimo-V2\.6-Flash \(byok\) · /); // byModel 行同规
+});
+
 // v7（2026-10-26 用户裁定）：session 重新拥有迷你槽，但形态是「会话簇」
 // （tokens 万/命中/轮/请求），不再是模型名；面板 render 的「模型」行保留（上方 modelRow 断言不变）。
 
