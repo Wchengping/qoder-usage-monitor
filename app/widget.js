@@ -44,15 +44,29 @@ export const ANCHOR_SELECTOR = '[data-turn-status-bar]';
 // 作为第一宿主；旧 turn-status-bar 只在回合进行中出现，降为兼容兜底。
 export const COMPOSER_SELECTOR = '[data-chat-composer]';
 // 真机实测（debug.json：panes=0）：客户端并未把 data-chat-session-id 渲染进这个文档，
-// 且 bundle 里带会话 id 的属性至少有三个名字——所以判定**不认属性名**：
-// 祖先链上任何名字含 session 的属性，其值若等于 daemon 已知会话 id（来自 state.local.sessions），
-// 即视为"当前查看的会话"。客户端日后改名也不会再失效。
+// 祖先链上的兜底曾经"不认属性名"——任何名字含 session 的属性只要值出现在已知会话集合里
+// 就采纳。0.4.11 实测这是错的：祖先链上还有路由/上次会话类指针（名字同样含 session），
+// 多窗口并发时会把别的会话误当当前会话（上游反馈 2026-10-28）。改为**只认值确实是会话 id
+// 的具名容器属性**（0.4.11 renderer bundle 实测；其余 data-chat-session-* 都是常量标记）：
+//   - data-chat-session-standalone-conversation：单会话根，值 = sessionId；
+//   - data-chat-session-id：分栏 pane，值 = sessionId；
+//   - data-session-id：侧栏会话行，值 = sessionId（只作祖先链最后兜底，正常走 'sidebar' 级别）。
 export const PANE_SELECTORS = [
   '[data-chat-session-id]', '[data-chat-session-single-conversation]', '[data-chat-session-pane-conversation]',
   '[data-chat-session-pane]', '[data-session-id]',
 ];
 export const PANE_SELECTOR = PANE_SELECTORS[0];
 export const ACTIVE_PANE_SELECTOR = '[data-chat-session-id][data-active]';
+export const SESSION_ID_ATTRS = new Set([
+  'data-chat-session-standalone-conversation',
+  'data-chat-session-id',
+  'data-session-id',
+]);
+
+/** 元素上值确为会话 id 的具名属性（白名单；诊断仍用 sessionAttrs 全量收集）。 */
+function sessionIdAttrs(el) {
+  return sessionAttrs(el).filter(([name]) => SESSION_ID_ATTRS.has(name));
+}
 
 /** 元素上所有名字含 session 的属性值（小写属性名 → 值），用于不认名字的判定与诊断。 */
 function sessionAttrs(el) {
@@ -73,11 +87,13 @@ function sessionAttrs(el) {
 
 /**
  * P3（spec §5.1）：解析「用户当前在看哪个会话」。返回 {sessionId, pane, method, diag}。
- * knownIds = daemon 已知的会话 id 集合（state.local.sessions[].id）——用来在不认属性名的前提下
- * 确认"这个值确实是会话 id"，避免把 pane id / 随机数误当会话。
- * 级别：① 'attr' 锚点祖先链上命中已知会话 id 的属性（真机主路径）；② 'active' 带 data-active 的
- * pane；③ 'anchor' 具名 pane 选择器命中锚点所在 pane；④ 'visible' 全页恰好一个可见 pane；
- * ⑤ 'focus' 多 pane 可见时取 document.activeElement 所在；⑥ 'only' 全页恰好一个；⑦ null 歧义不猜。
+ * knownIds = daemon 已知的会话 id 集合（state.local.sessions[].id）——用来确认"这个值确实是
+ * 会话 id"，避免把 pane id / 随机数误当会话。
+ * 级别（2026-10-28 上游反馈修订：显式身份优先，近似信号最后）：
+ *   ① 'active' 带 data-active 的 pane；② 'anchor' 具名 pane 选择器命中锚点所在 pane；
+ *   ③ 'visible' 全页恰好一个可见 pane；④ 'focus' 多 pane 可见时取 activeElement 所在；
+ *   ⑤ 'only' 全页恰好一个；⑥ 'attr' 锚点祖先链上**具名会话容器**属性（单会话根/pane，
+ *      结构性证据，优先于侧栏近似）；⑦ 'sidebar' 侧栏选中行（近似）；⑧ null 歧义不猜。
  */
 export function resolveActivePane(doc, anchorEl, knownIds) {
   const known = knownIds instanceof Set ? knownIds : new Set(Array.isArray(knownIds) ? knownIds : []);
@@ -89,15 +105,6 @@ export function resolveActivePane(doc, anchorEl, knownIds) {
   const diag = { panes: 0, activeMarked: 0, visible: 0, attrs: [], knownSize: known.size,
     anchorFound: false, docSize: 0, docSessionAttrs: [], docKnownHit: null };
   try {
-    // ① 祖先链不认名字：名字含 session 且值是已知会话 id
-    for (let el = anchorEl; el && el !== el.parentNode; el = el.parentNode) {
-      for (const [name, value] of sessionAttrs(el)) {
-        if (!diag.attrs.includes(name)) diag.attrs.push(name);
-        if (known.has(value)) return hit(value, el, 'attr', diag);
-      }
-      if (!el.parentElement && typeof el.closest !== 'function') break; // 无 parentElement 的假 DOM：只走一层
-      if (!el.parentElement) break;
-    }
     let panes = [];
     try {
       const seen = new Set();
@@ -114,7 +121,7 @@ export function resolveActivePane(doc, anchorEl, knownIds) {
     if (anchorEl && typeof anchorEl.closest === 'function') {
       for (const sel of PANE_SELECTORS) {
         const own = anchorEl.closest(sel);
-        const sid = sidOf(own) || (own && Array.from(sessionAttrs(own)).map(([, v]) => v).find((v) => known.has(v))) || null;
+        const sid = sidOf(own) || (own && sessionIdAttrs(own).map(([, v]) => v).find((v) => known.has(v))) || null;
         if (sid && (known.size === 0 || known.has(sid))) return hit(sid, own, 'anchor', diag);
       }
     }
@@ -138,9 +145,19 @@ export function resolveActivePane(doc, anchorEl, knownIds) {
       }
     }
     if (panes.length === 1) return hit(sidOf(panes[0]), panes[0], 'only', diag);
-    // 侧栏选中行（真机实测：外壳文档里唯一能对上已知会话 id 的属性是 data-session-id）。
-    // 近似信号：多标签/分栏时侧栏选中项未必等于嵌套聊天视图正在显示的那个，故排在所有 pane
-    // 级别之后；命中即标注 method='sidebar'，面板 tooltip 如实说明这是近似口径。
+    // 祖先链（真机单窗口主路径：panes=0，只剩包住聊天视图的单会话根属性）。这是**结构性**证据
+    // （直接包着锚点的容器），比侧栏选中行更贴近「正在看哪个会话」，故先用它。
+    // 只认值确实是会话 id 的具名容器属性；名字含 session 的路由/上次会话指针绝不采纳。
+    for (let el = anchorEl; el && el !== el.parentNode; el = el.parentNode) {
+      for (const [name, value] of sessionIdAttrs(el)) {
+        if (!diag.attrs.includes(name)) diag.attrs.push(name);
+        if (known.has(value)) return hit(value, el, 'attr', diag);
+      }
+      if (!el.parentElement && typeof el.closest !== 'function') break; // 无 parentElement 的假 DOM：只走一层
+      if (!el.parentElement) break;
+    }
+    // 侧栏选中行（近似信号，排最后）：多标签/分栏时侧栏选中项未必等于正在显示的视图。
+    // 命中即标注 method='sidebar'，面板 tooltip 如实说明这是近似口径。
     try {
       const rows = Array.from((doc && doc.querySelectorAll && doc.querySelectorAll('[data-session-id]')) || [])
         .filter((el) => known.has(el.getAttribute && el.getAttribute('data-session-id')));
@@ -235,6 +252,20 @@ export function setFmt(next) {
 export function setState(next) {
   state = next;
   if (dom) { renderStrip(); renderPanel(); renderHover(); }
+}
+
+/**
+ * P3 修复（2026-10-28，用户反馈 §1）：给每次成功轮询的响应打「身份跟随」标记。
+ * daemon 在 `?session=` 缺席时仍会回填 local.session（= 全局最新记录所属会话）——呈现层若在
+ * local.active 缺席时静默回落到它，多会话并行就会显示**别的会话**的数字（实测：4 会话并存时
+ * strip 出现了另一个会话的轮/次/credits）。widget 是唯一知道「这次轮询到底有没有身份」的一方，
+ * 故由它统一打标；modules/hover 见标记且无 local.active → 硬暴露 '--'，绝不回落。
+ * 兼容：harness/旧快照直接 setState 注入的 state 没有该标记，保持既有回落语义（P2 行为不变）。
+ */
+export function withActiveTracking(payload, tracked) {
+  const base = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {};
+  const meta = base.meta && typeof base.meta === 'object' && !Array.isArray(base.meta) ? base.meta : {};
+  return { ...base, meta: { ...meta, activeTracked: tracked === true } };
 }
 
 // ---------------------------------------------------------------- 注册区（Task 9 接线）
@@ -817,7 +848,8 @@ function renderStrip() {
 
 function isFiniteNum(v) { return typeof v === 'number' && Number.isFinite(v); }
 
-/** 活动会话（与 modules.activeSess 同规）：local.active.session 优先，缺席回落 local.session。 */
+/** 活动会话（与 modules.activeSess 同规）：local.active.session 优先；带身份跟随的轮询在没有
+ * local.active 时必须返回 null（硬暴露），只有旧快照/夹具（无 meta.activeTracked）才回落 local.session。 */
 function activeSessionOf() {
   const local = state && state.local;
   const a = local && local.active;
@@ -825,6 +857,7 @@ function activeSessionOf() {
     const s = a.session;
     return s && typeof s === 'object' && !Array.isArray(s) ? s : null;
   }
+  if (state && state.meta && state.meta.activeTracked === true) return null; // P3 修复：绝不显示别的会话
   const s = local && local.session;
   return s && typeof s === 'object' && !Array.isArray(s) ? s : null;
 }
@@ -866,7 +899,9 @@ function renderHover() {
   const n = (v) => (isFiniteNum(v) ? fmtNum(v, 0) : '--');
   const head = doc.createElement('div');
   head.className = 'qum-hover-title';
-  head.textContent = '会话累计 · 全部请求';
+  // P3 修复：带身份跟随但没解析出会话 → 标题如实说明（下面各行自然全 '--'，绝不显示别的会话）。
+  const unresolved = !s && state && state.meta && state.meta.activeTracked === true;
+  head.textContent = unresolved ? '会话累计 · 未识别当前会话' : '会话累计 · 全部请求';
   const rows = [];
   // 输入：credits 口径 = 计费输入估算（≈ 仅 contextWindow 非 runtime-config）；tokens 口径 = 真实总量。
   const inp = s ? (tk ? realPromptOf(s) : s.billedInput) : null;
@@ -886,7 +921,11 @@ function renderHover() {
   const tokSeg = `${fmtTokens(tok)} tok`;
   const crShown = s && isFiniteNum(s.creditsBillable) ? s.creditsBillable
     : s && isFiniteNum(s.credits) ? s.credits : null;
-  const usageRow = hoverRow(doc, '用量', tk ? tokSeg : `${fmtCredits(crShown)} cr · ${tokSeg}`);
+  // 用户反馈 §2：实扣 0 / 名义 > 0 → 「0/名义」，裸 0 会被误读为没花钱（真机全为免费量）。
+  const crText = s && isFiniteNum(s.creditsBillable) && s.creditsBillable === 0
+    && isFiniteNum(s.credits) && s.credits > 0
+    ? `0/${fmtCredits(s.credits)}` : fmtCredits(crShown);
+  const usageRow = hoverRow(doc, '用量', tk ? tokSeg : `${crText} cr · ${tokSeg}`);
   if (!tk && s && isFiniteNum(s.creditsBillable) && isFiniteNum(s.credits)) {
     const uncharged = Math.max(0, Math.round((s.credits - s.creditsBillable) * 100) / 100);
     usageRow.title = `实扣 ${fmtCredits(s.creditsBillable)} cr · 名义 ${fmtCredits(s.credits)} cr`
@@ -1005,7 +1044,7 @@ async function pollOnce() {
     const hadToken = !!token;
     if (issued) token = issued;
     strip.removeAttribute('data-qum-offline');
-    setState(await res.json());
+    setState(withActiveTracking(await res.json(), true)); // P3 修复：标记「本次轮询带身份跟随」
     // T10：补丁 client 冷启动没有 token——bootstrap 换到 token 即"安装时"时刻，
     // 立刻补一次账户 ingest（真机 spike 靠这条拿到首份 raw）。
     if (token && !hadToken) accountPoll();

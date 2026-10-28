@@ -10,6 +10,7 @@ import asar from '@electron/asar';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import net from 'node:net';
 import { spawnSync } from 'node:child_process';
 import { runInstall, runFinish, runningClientPid } from '../scripts/install.mjs';
 import { runUninstall } from '../scripts/uninstall.mjs';
@@ -442,6 +443,58 @@ test('install after client auto-update refreshes stale .orig; uninstall restores
   });
   assert.equal(un.code, 0);
   assert.equal(sha256File(sc.asar), newStock, '卸载恢复新版 stock，绝不回滚到旧版本');
+});
+
+// ---------------------------------------------------------------- 2026-10-28 上游反馈附录
+// 事故形态：凭据轮换后旧 daemon 未被替换 → 旧进程内存里是旧 bootstrap，新 asar 内嵌新码，
+// widget 永远 401 → strip 全 '--'。旧实现的 kill 以 /health probe 为前置条件，probe 一次
+// 假阴性（daemon 卡住/瞬时超时）就会跳过 kill，而 --ensure 又会对着旧进程报 already-running。
+test('2026-10-28 附录: daemon 替换不再受 /health 门控——probe 假阴性也必须无条件 kill 并拉起新进程', async () => {
+  const sc = await mkScenario();
+  useEnv(sc);
+  const order = [];
+  const r = await runInstall({
+    port: TEST_PORT, outDir: sc.outDir, widgetFilesDir: sc.widgetDir,
+    elevate: failElevate,
+    probeHealth: async () => null, // 模拟 probe 假阴性（旧实现会因此跳过 kill）
+    killDaemon: ({ port }) => { order.push(`kill:${port}`); },
+    spawnDaemon: ({ port }) => { order.push(`spawn:${port}`); },
+    diskFreeBytes: () => 3e9,
+    log: () => {},
+  });
+  assert.equal(r.code, 0);
+  assert.deepEqual(order, [`kill:${TEST_PORT}`, `spawn:${TEST_PORT}`],
+    'kill 无条件执行；端口能 bind 后才 spawn');
+});
+
+test('2026-10-28 附录: 旧 daemon 仍占端口 → 中止（code 3），不拉起假新进程，并给出手动命令', async () => {
+  const sc = await mkScenario();
+  useEnv(sc);
+  // 临时端口：49911 与 server.test.mjs 的 BYOK 用例同号，并行跑全量会互相阻塞。
+  const blocker = net.createServer(() => {});
+  await new Promise((resolve, reject) => {
+    blocker.once('error', reject);
+    blocker.listen(0, '127.0.0.1', resolve);
+  });
+  const port = blocker.address().port;
+  const { out, log } = collect();
+  let spawned = 0;
+  try {
+    const r = await runInstall({
+      port, outDir: sc.outDir, widgetFilesDir: sc.widgetDir,
+      elevate: failElevate, skipPreflight: true,
+      killDaemon: () => {}, // 模拟旧进程不退（pkill 失败/卡死）
+      spawnDaemon: () => { spawned += 1; },
+      daemonDownTimeoutMs: 300,
+      log,
+    });
+    assert.equal(r.code, 3, out.join('\n'));
+    assert.equal(spawned, 0, '端口仍被占时绝不拉起新 daemon（否则只是又一个假成功）');
+    assert.ok(out.some((l) => l.includes('401')), '日志说明旧凭据会导致 widget 401（strip 全 --）');
+    assert.ok(out.some((l) => l.includes('pkill -f')), '给出可执行的手动结束命令');
+  } finally {
+    await new Promise((resolve) => blocker.close(resolve));
+  }
 });
 
 // ---------------------------------------------------------------- 落盘闸门（2026-10-23 真机事故回归）

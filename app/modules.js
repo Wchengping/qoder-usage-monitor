@@ -123,6 +123,22 @@ function withCreditTip(el, o, key, f) {
   return el;
 }
 
+/**
+ * credits 主数字文本（用户反馈 §2，2026-10-28）：实扣 0 但名义 > 0 时出「0/名义」，
+ * 否则裸「0 cr」会被误读为「这个会话没花 credits」——真机实况恰相反：全为免费量
+ * （billable:false），实扣 0、名义几十上百。其余同 creditShown（实扣优先，缺失回落名义）。
+ * fmtFn 供 strip 迷你槽换成 fmtNum 两位小数（面板走 fmtCredits）。null → '--'。
+ */
+function creditText(f, o, key = 'credits', fmtFn) {
+  const v = creditShown(o, key);
+  if (v === null) return '--';
+  const ff = typeof fmtFn === 'function' ? fmtFn : (x) => f.fmtCredits(x);
+  const bill = o && typeof o === 'object' ? o[key + 'Billable'] : null;
+  const nom = o && typeof o === 'object' ? o[key] : null;
+  if (isNum(bill) && bill === 0 && isNum(nom) && nom > 0) return `0/${ff(nom)}`;
+  return ff(v);
+}
+
 function win(state, key) {
   const local = state && state.local;
   const w = local && local[key];
@@ -260,7 +276,7 @@ const usage = {
     const row = (label, key) => {
       const w = win(st, key);
       if (tk) return line(label, ioText(f, w));
-      let v = `${f.fmtCredits(creditShown(w))} cr`;
+      let v = `${creditText(f, w)} cr`;
       // token 非零才追加 in/out 段（真机现写 0）；格式沿用 consumption 行。
       const inp = w ? w.input : null;
       const out = w ? w.output : null;
@@ -318,10 +334,11 @@ const ltTokensMode = (state, lt) => {
 // ---------------------------------------------------------------- P3 活动会话取数（spec §5.3）
 // 三个会话级模块（session 的 model 槽、consumption 的 tokens/credits 槽、speed 的 tps/turnsec 槽
 // 与 full 三行）改读 state.local.active —— 用户当前查看的会话（daemon 按 ?session= 请求态产出）。
-// 真机结论（debug.json：anchorFound=false，docSize=1672）：widget 注入的是工作台外壳文档，聊天视图
-// （composer 与 data-turn-status-bar 锚点）在嵌套文档里，DOM 侧拿不到「用户正在看哪个会话」。
-// 故 active 缺席时**回落到全局锚定（= P2 行为）**，并把模块如实改名为「最近活跃会话」
-// （用户裁定 2026-10-14）。daemon 的 ?session= 请求态保留：日后做「面板点行钉选会话」可直接用。
+// 2026-10-28 用户反馈 §1 修复：回落到 local.session（= 全局最新记录所属会话）只允许发生在
+// **没有跟随标记**的旧快照/夹具上；widget 每次真实轮询都经 withActiveTracking 打标
+// （meta.activeTracked=true），此时 local.active 缺席 = 本次没解析出身份 → 硬暴露 '--'，
+// 绝不显示别人的会话（真机复现：4 会话并存时 strip 出现另一会话的轮/次/credits）。
+const isTracked = (state) => !!(state && state.meta && state.meta.activeTracked === true);
 const activeOf = (state) => {
   const a = state && state.local && state.local.active;
   return a && typeof a === 'object' ? a : null;
@@ -329,12 +346,14 @@ const activeOf = (state) => {
 const activeLt = (state) => {
   const a = activeOf(state);
   if (a) { const lt = a.lastTurn; return lt && typeof lt === 'object' ? lt : null; }
-  return ltOf(state); // 无活动会话信号 → 全局最新一轮
+  if (isTracked(state)) return null; // 跟随中但未识别 → 硬暴露，不回落全局最新一轮
+  return ltOf(state); // 旧快照/夹具（无跟随标记）→ 全局最新一轮（P2 行为）
 };
 const activeSess = (state) => {
   const a = activeOf(state);
   if (a) { const s = a.session; return s && typeof s === 'object' && !Array.isArray(s) ? s : null; }
-  return sessOf(state); // 同上回落
+  if (isTracked(state)) return null; // 同上：跟随中但未识别 → 硬暴露
+  return sessOf(state); // 旧快照/夹具 → 全局会话（P2 行为）
 };
 const activeSidOf = (state) => {
   const a = activeOf(state);
@@ -466,9 +485,8 @@ function sessBilledSeg(f, s, state) {
 
 const session = {
   id: 'session',
-  // 真机拿不到「正在看哪个会话」（见上方 P3 取数注释），故如实命名并给 tooltip 说明口径。
   title: '当前会话',
-  titleTip: '跟随侧栏选中的会话（近似信号：多标签/分栏时未必等于正在看的视图）；取不到时回落最近活跃会话',
+  titleTip: '跟随当前正在查看的会话；识别不到会话身份时显示 --（绝不回落显示其它会话的数据）',
   supports: ['half', 'full'],
   // P2 预览裁定：byModel 表（目标 2「本会话可看 per-model 明细」）只在 full 分支——本模块以 full
   // 进面板，否则真机不可达。half 形态保留（供未来编辑模式/窄布局）。
@@ -499,20 +517,24 @@ const session = {
     // 源缺失/乱值（升级前 daemon 快照）：full 出「暂无数据」不猜数（同 heatmap 降级）；
     // half 宽度紧，出单行 '--'（本会），行不消失。
     if (!s) {
+      // P3 修复（2026-10-28）：跟随中但未识别 → 如实说「未识别」，不再回落别的会话；
+      // 其余（空 state / 旧快照垃圾值 / 该会话无 usage）统一「暂无数据」。
+      const noSid = isTracked(ctx.state) && !activeOf(ctx.state);
+      const note = noSid ? '未识别当前会话（客户端未暴露会话身份）' : '暂无数据';
       if (ctx.size !== 'full') {
         const box = h('div', 'qum-session');
-        box.append(line('本会', tk ? '-- tok' : '-- cr'));
+        const el = line('本会', tk ? '-- tok' : '-- cr');
+        if (noSid) el.title = note;
+        box.append(el);
         return box;
       }
-      // P3 回退后：active 缺席已回落全局，所以走到这里就是「真的没有会话数据」（空 state /
-      // 旧快照垃圾值 / 该会话无 usage）——统一说「暂无数据」，不再断言客户端结构问题。
-      return h('div', 'qum-note', '暂无数据');
+      return h('div', 'qum-note', note);
     }
     if (ctx.size !== 'full') {
       const box = h('div', 'qum-session');
       box.append(tk
         ? line('本会', `${f.fmtTokens(realPrompt(s))} tok`)
-        : withCreditTip(line('本会', `${f.fmtCredits(creditShown(s))} cr`), s, 'credits', f));
+        : withCreditTip(line('本会', `${creditText(f, s)} cr`), s, 'credits', f));
       return box;
     }
     const box = h('div', 'qum-session');
@@ -535,9 +557,9 @@ const session = {
         : `${f.fmtTokens(s.output)} tok`));
     } else {
       box.append(withCreditTip(
-        line('本会话', `${f.fmtCredits(creditShown(s))} cr · ${scale}`), s, 'credits', f));
+        line('本会话', `${creditText(f, s)} cr · ${scale}`), s, 'credits', f));
       box.append(withCreditTip(
-        line('近30分钟', `${f.fmtCredits(creditShown(s, 'rateCpm30'))} cr/min`), s, 'rateCpm30', f));
+        line('近30分钟', `${creditText(f, s, 'rateCpm30')} cr/min`), s, 'rateCpm30', f));
       box.append(line('计费输入', sessBilledSeg(f, s, ctx.state)));
     }
     box.append(line('会话', typeof s.id === 'string' && s.id ? s.id.slice(0, 8) : '--'));
@@ -588,7 +610,7 @@ function sessionRowText(f, state, s) {
   if (rowTk) return `${id8} · ${f.fmtTokens(realPrompt(o))} tok · ${rounds}${req} · ${model}`;
   const approx = o.billedSource === 'fallback200k' || o.billedSource === 'mixed';
   const tok = `${approx ? '≈' : ''}${f.fmtTokens(o.billedInput)} tok`;
-  return `${id8} · ${f.fmtCredits(creditShown(o))} cr · ${tok} · ${rounds}${req} · ${model}`;
+  return `${id8} · ${creditText(f, o)} cr · ${tok} · ${rounds}${req} · ${model}`;
 }
 
 /** 单会话行元素（credits tooltip；tokens 口径不挂 cr 说明）。 */
@@ -617,7 +639,7 @@ function byModelRowText(f, state, m) {
   const turns = isNum(o.turns) ? String(Math.round(o.turns)) : '--';
   const outTps = tpsText(f, o.outTps, o.outTpsExact === true);
   const avg = isNum(o.avgTurnSec) ? `${Math.round(o.avgTurnSec)}s` : '--';
-  const crSeg = rowTk ? '-- cr' : `${f.fmtCredits(creditShown(o))} cr`;
+  const crSeg = rowTk ? '-- cr' : `${creditText(f, o)} cr`;
   const approx = o.billedSource === 'fallback200k' || o.billedSource === 'mixed';
   const tokSeg = rowTk
     ? `${f.fmtTokens(realPrompt(o))} tok`
@@ -802,8 +824,8 @@ function modelsCard(f, state, r, i, max, sum) {
   };
   const cols = h('div', 'qum-models-cols');
   cols.append(
-    cell('今日', cToday === null ? '-' : `${f.fmtCredits(cToday)} cr`),
-    cell('近7日', c7 === null ? '-' : `${f.fmtCredits(c7)} cr`),
+    cell('今日', cToday === null ? '-' : `${creditText(f, r, 'creditsToday')} cr`),
+    cell('近7日', c7 === null ? '-' : `${creditText(f, r, 'credits7d')} cr`),
     cell('Tokens', f.fmtTokens(tokenSum(r))),
     cell('时延/回合', isNum(r.avgTurnSec) ? `${Math.round(r.avgTurnSec)}s/回合` : '-'),
     cell('占比', c7 === null || !isNum(sum) || sum <= 0 ? '-' : `${Math.round(c7 / sum * 100)}%`),
@@ -891,7 +913,9 @@ const consumption = {
     if (ctx && ctx.slot === 'credits') {
       const s = activeSess(ctx && ctx.state);
       const c = creditShown(s);
-      const v = s && !activeMode(ctx.state) && isNum(c) ? `${f.fmtNum(c, 2)} cr` : '-- cr';
+      // 实扣 0 / 名义 > 0 → 「0/57.98 cr」（用户反馈 §2：裸 0 会被误读为没花钱）
+      const v = s && !activeMode(ctx.state) && isNum(c)
+        ? `${creditText(f, s, 'credits', (x) => f.fmtNum(x, 2))} cr` : '-- cr';
       const el = h('span', 'qum-mini', v);
       if (isNum(c) && !activeMode(ctx.state)) {
         const tip = creditTip(s, 'credits', f);
@@ -914,7 +938,7 @@ const consumption = {
     const box = h('div', 'qum-consumption');
     const crOf = (key) => {
       const w = win(st, key);
-      return f.fmtCredits(creditShown(w));
+      return creditText(f, w);
     };
     const row = (label, key) => {
       const w = win(st, key);
@@ -1022,7 +1046,7 @@ const speed = {
         const t = s ? s.outTps30 : null;
         box.append(line('生成速度', tpsText(f, t, s && s.outTps30Exact === true) + ' · 近30分钟'));
         box.append(withCreditTip(
-          line('近30分钟', `${f.fmtCredits(creditShown(s, 'rateCpm30'))} cr/min`), s, 'rateCpm30', f));
+          line('近30分钟', `${creditText(f, s, 'rateCpm30')} cr/min`), s, 'rateCpm30', f));
       }
       box.append(h('div', 'qum-note', '生成速度 = 最佳输出（真值优先，缺失才估算）÷ 实测纯模型秒（~ 为估算；无日志轮按轮时长扣工具时间）'));
     } else {
@@ -1061,7 +1085,10 @@ const tools = {
   render(ctx) {
     const f = fmtOf(ctx);
     const s = activeSess(ctx.state);
-    if (!s) return h('div', 'qum-note', '暂无数据');
+    if (!s) {
+      return h('div', 'qum-note',
+        isTracked(ctx.state) && !activeOf(ctx.state) ? '未识别当前会话' : '暂无数据');
+    }
     const t = s.tools && typeof s.tools === 'object' && !Array.isArray(s.tools) ? s.tools : null;
     const box = h('div', 'qum-tools');
     box.append(line('调用', `${toolCountText(f, t && t.calls)} 次`));

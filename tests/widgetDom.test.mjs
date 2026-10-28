@@ -869,7 +869,104 @@ test('P3 T5 resolveActivePane: 命中活动 pane；回落锚点 pane；回落全
   assert.equal(resolveActivePane({ querySelector() { throw new Error('detached'); } }, null).sessionId, null, 'DOM 访问异常一律吞成 null');
 });
 
-// ---- P3 T6: sid 生命周期（URL 带参 / 无 pane 不带参 / 切换即去抖刷新）----
+// ---- 2026-10-28 上游反馈 §1：身份属性白名单与权威顺序 ----
+// 祖先链只认「值确实是会话 id 的具名会话容器属性」（0.4.11 bundle 实测）：
+// data-chat-session-standalone-conversation / data-chat-session-id / data-session-id。
+// 其它名字含 session 的属性（路由 / 上次会话指针）即便值命中已知会话也不采纳。
+const attrNode = (attrs, parent = null) => ({
+  attributes: Object.entries(attrs).map(([name, value]) => ({ name, value })),
+  getAttribute: (n) => (n in attrs ? String(attrs[n]) : null),
+  get parentNode() { return parent; },
+  parentElement: parent,
+  closest: () => null,
+});
+const EMPTY_DOC = { querySelector: () => null, querySelectorAll: () => [] };
+
+test('2026-10-28 §1 resolveActivePane: 只认白名单容器属性；锚点容器证据优先于侧栏近似；活动 pane 最优先', async () => {
+  const { resolveActivePane } = await import('../app/widget.js');
+  const known = new Set(['S-known', 'S-pane', 'S-root']);
+  // 非白名单指针（路由/上次会话）→ 绝不采纳
+  const badRoot = attrNode({ 'data-last-session-id': 'S-known' });
+  const leafBad = attrNode({}, badRoot);
+  const rBad = resolveActivePane(EMPTY_DOC, leafBad, known);
+  assert.equal(rBad.sessionId, null, '名字含 session 但不在白名单 → 不采纳（哪怕值命中已知会话）');
+  assert.deepEqual(rBad.diag.attrs, [], '诊断也不把它记成身份属性');
+  // 单会话根（0.4.11 真机形态）→ method='attr'
+  const goodRoot = attrNode({ 'data-chat-session-standalone-conversation': 'S-root' });
+  const leaf = attrNode({}, goodRoot);
+  const rRoot = resolveActivePane(EMPTY_DOC, leaf, known);
+  assert.equal(rRoot.sessionId, 'S-root');
+  assert.equal(rRoot.method, 'attr');
+  assert.equal(rRoot.pane, goodRoot);
+  assert.deepEqual(rRoot.diag.attrs, ['data-chat-session-standalone-conversation']);
+  // 侧栏选中行（近似）与锚点容器（结构证据）冲突 → 取容器
+  const rowEl = {
+    attributes: [{ name: 'data-session-id', value: 'S-known' }],
+    getAttribute: (n) => (n === 'data-session-id' ? 'S-known' : null),
+    hasAttribute: (n) => n === 'data-session-id' || n === 'data-active',
+    offsetParent: {},
+  };
+  const docWithRow = {
+    querySelector: () => null,
+    querySelectorAll: (sel) => (sel === '[data-session-id]' ? [rowEl] : []),
+  };
+  const rConflict = resolveActivePane(docWithRow, leaf, known);
+  assert.equal(rConflict.sessionId, 'S-root', '锚点所在会话容器优先于侧栏选中行（近似信号）');
+  assert.equal(rConflict.method, 'attr');
+  // 显式活动 pane 仍压过一切
+  const paneEl = mkPane('S-pane', true);
+  const rPane = resolveActivePane(mkDoc([paneEl]), leaf, known);
+  assert.equal(rPane.sessionId, 'S-pane');
+  assert.equal(rPane.method, 'active');
+});
+
+test('2026-10-28 §1 withActiveTracking: 打标不修改入参；meta 缺失/乱值/空载荷也不抛', async () => {
+  const { withActiveTracking } = await import('../app/widget.js');
+  const src = { meta: { generatedAt: 5, scanErrors: [] }, local: { session: null } };
+  const out = withActiveTracking(src, true);
+  assert.equal(out.meta.activeTracked, true);
+  assert.equal(out.meta.generatedAt, 5, '其它元数据原样保留');
+  assert.equal(src.meta.activeTracked, undefined, '不得修改入参（daemon 响应对象只读原则）');
+  assert.equal(out.local, src.local, '浅拷贝：大对象不复制');
+  assert.equal(withActiveTracking(null, true).meta.activeTracked, true);
+  assert.equal(withActiveTracking({ meta: 'x' }, false).meta.activeTracked, false);
+});
+
+// ---- 2026-10-28 §1/§2：悬停卡硬暴露与「0/名义」 ----
+test('2026-10-28 悬停卡: activeTracked 无 active → 标题明确未识别、各行 --；实扣 0/名义>0 → 0/名义', async () => {
+  const mod = await import('../app/widget.js');
+  await import('../app/modules.js');
+  const MOCK = JSON.parse(read('tests/harness/mock-state.json'));
+  // ① 跟随中但未识别：绝不显示全局最新会话的数字
+  const st = JSON.parse(JSON.stringify(MOCK));
+  delete st.local.active;
+  mod.setState(mod.withActiveTracking(st, true));
+  const f1 = makeFakeDom();
+  const root1 = mod.mount(f1.host, { baseUrl: '' });
+  root1.fire('mouseenter');
+  const t1 = deepText(root1.children[2]);
+  assert.match(t1, /未识别当前会话/);
+  assert.match(t1, /用量-- cr · -- tok/);
+  assert.match(t1, /规模-- 轮 · -- 次 · -- 工具 · -- 失败/);
+  assert.doesNotMatch(t1, /123 cr/, '不得出现全局最新会话的 credits');
+  // ② 实扣 0 / 名义 79.68 → 0/80
+  const st2 = JSON.parse(JSON.stringify(MOCK));
+  st2.local.active.session = { ...st2.local.active.session, creditsBillable: 0, credits: 79.68 };
+  mod.setState(mod.withActiveTracking(st2, true));
+  const f2 = makeFakeDom();
+  const root2 = mod.mount(f2.host, { baseUrl: '' });
+  root2.fire('mouseenter');
+  const t2 = deepText(root2.children[2]);
+  assert.match(t2, /用量0\/80 cr · 128\.0k tok/, '实扣 0 并列名义');
+  // ③ 旧快照（无标记）保持既有回落，标题不变
+  mod.setState(st);
+  const f3 = makeFakeDom();
+  const root3 = mod.mount(f3.host, { baseUrl: '' });
+  root3.fire('mouseenter');
+  assert.match(deepText(root3.children[2]), /会话累计 · 全部请求/, '无标记的夹具仍按 P2 行为回落');
+});
+
+
 test('P3 T6: 有活动 pane → /state 带 session 参数；pane 切换 → sid 跟随并挂 300ms 去抖轮询', async () => {
   const mod = await import('../app/widget.js');
   const f = makeFakeDom();
@@ -1057,28 +1154,38 @@ test('P3 T12 activeDiagnostics: 无 pane → sid null/method null 且计数为 0
   assert.equal(d.panes, 1); assert.equal(d.activeMarked, 1);
 });
 
-// ---- P3 T13：真机主路径——不认属性名，靠"值 ∈ daemon 已知会话 id"确认当前会话 ----
-test('P3 T13 resolveActivePane: 祖先链上任意 data-*session* 属性值命中已知 id 即采信；未知值不误采', async () => {
+// ---- P3 T13（2026-10-28 修订）：祖先链只认白名单会话容器属性 + 值 ∈ 已知会话 id ----
+// 旧契约「任意 data-*session* 属性命中已知 id 即采信」正是上游反馈 §1 的根因之一：
+// 路由/上次会话指针这类属性会把别的会话 id 塞进来。现只认结构化容器白名单。
+test('P3 T13 resolveActivePane: 祖先链只认白名单容器属性；未知值不误采；无已知 id 不猜', async () => {
   const { resolveActivePane } = await import('../app/widget.js');
   const mk = (attrs, parent) => ({
     attributes: Object.entries(attrs).map(([name, value]) => ({ name, value })),
     parentElement: parent || null, parentNode: parent || null, dataset: {},
   });
   const known = new Set(['S-real', 'S-other']);
-  // 锚点 → 中间层（无 session 属性）→ 视图根（属性名是客户端自己的 data-conv-session）
-  const root = mk({ 'data-conv-session': 'S-real', 'data-testid': 'chat-view' });
+  const emptyDoc = { querySelector: () => null, querySelectorAll: () => [] };
+  // 非白名单属性（旧客户端形态 data-conv-session）即使值命中已知 id → 不采纳
+  const oldRoot = mk({ 'data-conv-session': 'S-real', 'data-testid': 'chat-view' });
+  const oldMid = mk({ 'data-role': 'composer' }, oldRoot);
+  const oldAnchor = mk({ 'data-turn-status-bar': '1' }, oldMid);
+  const rOld = resolveActivePane(emptyDoc, oldAnchor, known);
+  assert.equal(rOld.sessionId, null, '非白名单属性绝不采信（哪怕值命中已知会话）');
+  assert.deepEqual(rOld.diag.attrs, [], '诊断身份属性只记白名单名');
+  // 白名单单会话根（0.4.11 真机形态）→ method='attr'
+  const root = mk({ 'data-chat-session-standalone-conversation': 'S-real', 'data-testid': 'chat-view' });
   const mid = mk({ 'data-role': 'composer' }, root);
   const anchor = mk({ 'data-turn-status-bar': '1' }, mid);
-  const emptyDoc = { querySelector: () => null, querySelectorAll: () => [] };
   const r = resolveActivePane(emptyDoc, anchor, known);
-  assert.equal(r.sessionId, 'S-real', '不认属性名也能命中');
+  assert.equal(r.sessionId, 'S-real', '白名单属性 + 已知值 → 命中');
   assert.equal(r.method, 'attr');
-  assert.deepEqual(r.diag.attrs, ['data-conv-session'], '诊断只记祖先链上名字含 session 的属性名（不含值，避免把会话内容外传）');
-  // 值不在已知集合里 → 不采信（避免把 pane id / 随机数当会话）
-  const root2 = mk({ 'data-conv-session': 'pane-77' });
+  assert.deepEqual(r.diag.attrs, ['data-chat-session-standalone-conversation'],
+    '诊断只记祖先链上的白名单属性名（不含值，避免把会话内容外传）');
+  // 白名单属性但值不在已知集合里 → 不采信（避免把 pane id / 随机数当会话）
+  const root2 = mk({ 'data-chat-session-standalone-conversation': 'pane-77' });
   const a2 = mk({ 'data-turn-status-bar': '1' }, root2);
   assert.equal(resolveActivePane(emptyDoc, a2, known).sessionId, null, '未知值绝不采信');
-  // 已知集合为空（首轮 /state 前）→ 该级不启用，落到后续具名级别
+  // 已知集合为空（首轮 /state 前）→ 该级不启用，绝不猜
   assert.equal(resolveActivePane(emptyDoc, anchor, new Set()).method !== 'attr', true,
     '无已知 id 时不猜');
 });

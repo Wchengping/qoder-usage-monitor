@@ -263,6 +263,46 @@ export async function waitDaemonDown(probe, port, { timeoutMs = 3000 } = {}) {
   return false;
 }
 
+/** 端口是否真的空闲（能 bind 才算）。比 /health 更硬：daemon 卡死/事件循环堵住时
+ *  socket 仍占着端口而 /health 必然超时——只看 probe 会把「还活着」误判成「已退出」。 */
+export function tryBindPort(port) {
+  return new Promise((resolve) => {
+    const srv = net.createServer();
+    srv.once('error', () => resolve(false));
+    srv.once('listening', () => srv.close(() => resolve(true)));
+    srv.listen(port, '127.0.0.1');
+  });
+}
+
+export async function waitPortFree(port, timeoutMs = 3000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await tryBindPort(port)) return true;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  return tryBindPort(port);
+}
+
+/**
+ * 轮换凭据后替换旧 daemon（用户反馈附录，2026-10-28 修复）。
+ * 旧实现把 kill 挂在 `probe(/health)` 上：probe 一次假阴性（daemon 卡住 / 瞬时超时），旧进程
+ * 带着内存里的旧 bootstrap 存活，而新 asar 内嵌新码 → widget 换 token 永远 401，strip 全 '--'。
+ * 现在：无条件按端口 kill（幂等）→ 等端口真正可 bind → 仍被占则中止（code 3），绝不拉起
+ * 一个根本 bind 不上、却对外报「成功」的假新进程。
+ */
+export async function replaceDaemon({ port, killDaemon, spawnDaemon, log, timeoutMs = 3000 } = {}) {
+  await killDaemon({ port });
+  const free = await waitPortFree(port, timeoutMs);
+  if (!free) {
+    log(`安装中止：端口 ${port} 仍被旧进程占用，旧 daemon 未能在 ${timeoutMs}ms 内退出。`);
+    log('  旧进程内存里是旧 bootstrap/token，与新 asar 内嵌凭据不一致 → widget 会持续 401（strip 全 --）。');
+    log(`  手动结束：pkill -f 'server\\.mjs.*--port ${port}'，确认端口空闲后重跑本命令。`);
+    return { ok: false, code: 3 };
+  }
+  await spawnDaemon({ port, args: daemonArgs(port), daemonScript: DAEMON_SCRIPT });
+  return { ok: true };
+}
+
 /** 替换 app.asar 后必须失效 @electron/asar 按路径缓存的旧 header，否则同进程后续读取拿到过期内容。 */
 export function uncacheAsar(...p) {
   try { asar.uncache(...p); } catch { /* 缓存清理尽力而为 */ }
@@ -470,14 +510,14 @@ export async function runInstall(opts = {}) {
   writeRepoPath(REPO);
   // 凭据轮换：新 asar 的 loader 内嵌新 bootstrap；旧 daemon 内存里是旧码 → 必须换进程。
   // token 一并作废（删文件，initAuth 启动时生成新值），历史/配额数据不动。
-  const daemonWasRunning = !!(await probe(port));
+  // 用户反馈附录修复：不再以 probe 为 kill 的前置条件（假阴性会让旧进程带旧码存活 → 新码 401），
+  // 无条件 kill 后以「端口可 bind」为硬判据，仍被占则中止（code 3）。
   saveBootstrap(bootstrapCode);
   clearToken();
-  if (daemonWasRunning) await killDaemon({ port });
-  if (daemonWasRunning && !(await waitDaemonDown(probe, port))) {
-    log(`警告：端口 ${port} 上旧 daemon 未在 3s 内退出，若新进程未接管请手动重启`);
-  }
-  await spawnDaemon({ port, args: daemonArgs(port), daemonScript: DAEMON_SCRIPT });
+  const rep = await replaceDaemon({
+    port, killDaemon, spawnDaemon, log, timeoutMs: opts.daemonDownTimeoutMs,
+  });
+  if (!rep.ok) return { code: rep.code, state: record };
   log('已轮换 bootstrap/token（旧凭据失效）');
   log('重启客户端生效（不自动重启）');
   return { code: 0, state: record };
@@ -491,7 +531,6 @@ export async function runFinish(opts = {}) {
   const now = opts.now || Date.now;
   const spawnDaemon = opts.spawnDaemon || makeSpawnDaemon(log);
   const killDaemon = opts.killDaemon || defaultKillDaemon;
-  const probe = opts.probeHealth || defaultDaemonProbe;
   const writeRepoPath = opts.writeRepoPath || saveRepoPath;
   const paths = targetPaths(opts.asarPath || appAsarPath());
 
@@ -524,14 +563,13 @@ export async function runFinish(opts = {}) {
   writeRepoPath(REPO); // --finish 成功路径同样写 repo-path（与 runInstall 双覆盖）
   // 手动替换完成 → 补写与产物一致的凭据并重启 daemon（旧格式 pending 无 code：保持原凭据）。
   if (typeof pending.bootstrapCode === 'string' && /^[0-9a-f]{16}$/.test(pending.bootstrapCode)) {
-    const daemonWasRunning = !!(await probe(record.port));
     saveBootstrap(pending.bootstrapCode);
     clearToken();
-    if (daemonWasRunning) await killDaemon({ port: record.port });
-    if (daemonWasRunning && !(await waitDaemonDown(probe, record.port))) {
-      log(`警告：端口 ${record.port} 上旧 daemon 未在 3s 内退出，若新进程未接管请手动重启`);
-    }
-    await spawnDaemon({ port: record.port, args: daemonArgs(record.port), daemonScript: DAEMON_SCRIPT });
+    // 同 runInstall：kill 不受 probe 门控，端口可 bind 才算旧 daemon 已退出（用户反馈附录修复）。
+    const rep = await replaceDaemon({
+      port: record.port, killDaemon, spawnDaemon, log, timeoutMs: opts.daemonDownTimeoutMs,
+    });
+    if (!rep.ok) return { code: rep.code, state: record };
     log('已轮换 bootstrap/token（旧凭据失效）');
   } else {
     await spawnDaemon({ port: record.port, args: daemonArgs(record.port), daemonScript: DAEMON_SCRIPT });

@@ -1221,6 +1221,92 @@ test('P3 T8 回退（真机结论）: active 缺席 → 六槽出全局值、无
   assert.doesNotMatch(sessCell, /未取到当前会话（客户端结构可能已变）/, '不再断言客户端结构问题');
 });
 
+// ---- 2026-10-28 上游反馈 §1：跟随标记 + 无 active → 硬暴露，绝不回落全局最新会话 ----
+// 真机复现：4 个会话并存，strip 出现了另一个会话的轮/次/credits（= 全局最新会话），
+// 而用户正在看的会话是另一个。根因 = daemon 在 ?session= 缺席时仍回填 local.session（全局最新），
+// 呈现层再静默回落。widget 现在给每次真实轮询打 meta.activeTracked=true：此时 local.active 缺席
+// 就是「没解析出身份」，必须显示 -- 与说明，而不是别人的数字。
+test('P3 修复 §1: activeTracked 且无 local.active → 六槽/本会话/工具硬暴露，不出现全局最新会话的数字', async () => {
+  const mod = await import('../app/widget.js');
+  const st = JSON.parse(JSON.stringify(mock));
+  delete st.local.active;
+  st.meta = { ...st.meta, activeTracked: true };
+  mod.setState(st);
+  const root = mod.mount(makeHost(), { baseUrl: '' });
+  const stripText = root.children[0].children.map(textOf).join('|');
+  assert.doesNotMatch(stripText, /12\.8万|123\.4 cr|45\.6 t\/s|32\.4 s/,
+    `不得出现全局最新会话的任何数字：${stripText}`);
+  const val = (slot) => {
+    const col = findAll(root.children[0], 'qum-slot').find((n) => n.dataset.slot === slot);
+    return textOf(findAll(col, 'qum-slot-value')[0]);
+  };
+  assert.equal(val('session'), '--');
+  assert.equal(val('tools'), '工具 -- · 失败 --');
+  assert.equal(val('credits'), '-- cr');
+  assert.equal(val('tps'), '⚡ -- t/s');
+  assert.equal(val('turnsec'), '--');
+  const sessCell = textOf(root.children[1].children.find((c) => c.dataset.module === 'session'));
+  assert.match(sessCell, /未识别当前会话（客户端未暴露会话身份）/, '会话模块如实说明未识别');
+  assert.doesNotMatch(sessCell, /本会话\d/, '不得显示任何本会话数字');
+  const toolsCell = textOf(root.children[1].children.find((c) => c.dataset.module === 'tools'));
+  assert.match(toolsCell, /未识别当前会话/);
+});
+
+// ---- 2026-10-28 上游反馈 §2：实扣 0 / 名义 > 0 → 「0/名义」----
+// 真机实况：窗口与多数会话全为免费量（billable:false）→ creditsBillable=0、名义几十上百。
+// 旧呈现只出裸「0 cr」，会被读成「没花 credits」。主数字仍是实扣（P0 裁定不变），
+// 只在 0 且有名义值时并列名义，tooltip 继续给完整 实扣/名义/未扣减。
+test('§2 实扣 0 / 名义 >0 → 底栏/本会话/近30分钟/窗口/会话行/byModel/模型卡均出「0/名义」，tooltip 保持三口径', async () => {
+  const mod = await import('../app/widget.js');
+  const st = JSON.parse(JSON.stringify(mock));
+  st.local.session = {
+    ...st.local.session, creditsBillable: 0, credits: 79.68, rateCpm30: 1.234, rateCpm30Billable: 0,
+  };
+  st.local.session.byModel = st.local.session.byModel.map((m, i) => (i === 0
+    ? { ...m, creditsBillable: 0, credits: 8.4 } : m));
+  st.local.window5h = { ...st.local.window5h, creditsBillable: 0, credits: 57.98 };
+  st.local.sessions = st.local.sessions.map((s, i) => (i === 0
+    ? { ...s, creditsBillable: 0, credits: 133.66 } : s));
+  st.local.byModelWindow = {
+    ...st.local.byModelWindow,
+    rows: st.local.byModelWindow.rows.map((r, i) => (i === 0
+      ? { ...r, creditsTodayBillable: 0, creditsToday: 29, credits7d: 912, credits7dBillable: 0 } : r)),
+  };
+  st.meta = { ...st.meta, activeTracked: true };
+  const state = syncActive(st);
+  mod.setState(state);
+  const root = mod.mount(makeHost(), { baseUrl: '' });
+  const val = (slot) => {
+    const col = findAll(root.children[0], 'qum-slot').find((n) => n.dataset.slot === slot);
+    return textOf(findAll(col, 'qum-slot-value')[0]);
+  };
+  assert.equal(val('credits'), '0/79.68 cr', '底栏 credits 槽：实扣 0 并列名义（两位小数）');
+  const sessCell = root.children[1].children.find((c) => c.dataset.module === 'session');
+  const sessText = textOf(sessCell);
+  assert.match(sessText, /本会话0\/80 cr · 23 轮 · 187 次/, '面板主数字 0/名义（fmtCredits 整数）');
+  assert.match(sessText, /近30分钟0\/1\.2 cr\/min/, '近30分钟速率同样并列');
+  assert.match(sessText, /0\/8\.4 cr/, 'byModel 行同样并列');
+  const lines = findAll(sessCell, 'qum-line');
+  assert.equal(lines[0].title, '实扣 0 cr · 名义 80 cr · 未扣减 80 cr', 'tooltip 三口径不变');
+  const usageCell = textOf(root.children[1].children.find((c) => c.dataset.module === 'usage'));
+  assert.match(usageCell, /近5小时0\/58 cr/, '窗口行并列名义（57.98 → 58）');
+  const sessionsCell = textOf(root.children[1].children.find((c) => c.dataset.module === 'sessions'));
+  assert.match(sessionsCell, /0\/134 cr/, '会话明细行并列名义（133.66 → 134）');
+  const modelsCell = textOf(root.children[1].children.find((c) => c.dataset.module === 'models'));
+  assert.match(modelsCell, /0\/29 cr/, '模型卡今日并列名义（真实字段名 creditsToday）');
+  assert.match(modelsCell, /0\/912 cr/, '模型卡近7日并列名义');
+  // 实扣 > 0 时维持单值（不引入噪声）
+  const st2 = JSON.parse(JSON.stringify(st));
+  st2.local.session = { ...st2.local.session, creditsBillable: 12.5 };
+  mod.setState(syncActive(st2));
+  const root2 = mod.mount(makeHost(), { baseUrl: '' });
+  const val2 = (slot) => {
+    const col = findAll(root2.children[0], 'qum-slot').find((n) => n.dataset.slot === slot);
+    return textOf(findAll(col, 'qum-slot-value')[0]);
+  };
+  assert.equal(val2('credits'), '12.5 cr', '实扣非零 → 仍只显示实扣');
+});
+
 // ---- P3 T10: 会话明细里当前会话行带高亮类（列表本身仍是全局窗口，spec §5.3）----
 test('P3 T10: sessions 列表中 sessionId === active.sessionId 的行加 .qum-session-active', async () => {
   const mod = await import('../app/widget.js');
