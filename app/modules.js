@@ -1,7 +1,13 @@
 // app/modules.js
 // Qoder Usage Monitor — P1.5 模块集（Task 9 + 用户裁定的真实模型重排 + T13 账户两新源）。
 // import 本文件即完成接线：setFmt(format.js) 注入 widget 的 ctx.fmt，registerModule 注册
-// 12 个模块（usage/session/sessions/models/consumption/cache/speed/tools/pack/mascot/heatmap/metrics）。
+// 13 个模块（pulse/turnspeed/session/sessions/models/consumption/cache/speed/tools/pack/mascot/heatmap/metrics）。
+// v8（2026-10-30 用户裁定）：面板顶部新增 pulse（用量波形）+ turnspeed（逐轮生成速度）两张
+// full 卡片；usage（用量节奏）与 consumption 信息重复，按"删重复"裁定整体删除；资源包口径
+// 改为 quotaAgg 聚合（addOn + dedicated 专属积分），strip/pack/mascot 同源。
+// v8.1（2026-10-30 用户追加）：turnspeed 的逐轮柱可点选——所选行柱下出「第 N 轮 · HH:MM · tps」
+// 读数（role=button/tabindex/aria-pressed，Enter/Space 等效）；选中按 会话+模型+ts 记忆，
+// 10s 轮询重渲染后保留，切会话/该轮滚出窗口自动失效（绝不跨会话残留）。
 // 顶层不摸 window/document：DOM 创建只发生在 render/renderMini 内（经
 // globalThis.document），因此 node --test 可直接 import 断言注册表元数据；
 // 浏览器侧由 widget.js mount() 的注册区惰性 import（补丁 client 的 loader 只
@@ -14,20 +20,17 @@
 //    两条假额度条（同一账户仪表挂两个误导性标题）整体删除，连带移除 accountQuota
 //    共享仪表、本地/账户徽标、假条 pace 刻度与重置倒计时（资源包无重置字段，不出
 //    任何倒计时——保持事实面）。
-//  - pack（资源包）升级为真仪表（Strip v3：面板专有，无 renderMini）：full = .qum-bar
-//    fill（used/total，CSS 类合法复用，无 pace tick）+ 单行「已用 750 / 1200 · 剩余 450 cr」
+//  - pack（资源包）升级为真仪表（v7 恢复 strip quota 槽；v8 起 strip/pack 同源 quotaAgg）：
+//    full = .qum-bar fill（used/total，CSS 类合法复用，无 pace tick）+ 单行「已用 750 / 1200 · 剩余 450 cr」
 //    （fmtCredits，无 k 缩写）；used/total 不可得 → 降级为仅剩余行、不出 bar。half =「剩余 N」
-//    （pickPack 链，候选键链逐字全防御，链不中/无账户 → '--'）。
-//  - usage（用量节奏，新模块，接替两条假条的信息面）：full 两行「近5小时 N cr」「本周
-//    N cr」（本地窗口 credits 为主，token 非零才追加 · in/out——沿用 consumption 行
-//    格式）；half 一行「今日 N cr」。无 bar/百分比/徽标——本地口径由模块标题承担。
-//    （Strip layout v3：usage 无 slotIds/renderMini——面板 render 不变。）
+//    （quotaAgg 剩余，回落 pickPack 链；链不中/无账户 → '--'）。
+//  - usage（用量节奏）：P1.5 的信息面模块，v8 因与 consumption 重复已整体删除。
 //  - cacheHitRate null → '--'（真机本地不落盘缓存字段，长期 -- 会被误读为故障）：null 行值
 //    span 加 title「客户端未落盘缓存字段」；整宽三窗口全 null → 追加 sub-line「本地无缓存数据」
 //    （部分有数不谎称全无）；half 仅 -- + title，宽度紧不加 note 行。
-//  - mascot 阈值（P1.5 rekey）：addOnQuota 剩余 >50% 🙂 / 20–50% 😐 / <20% 😨；
-//    无账户数据（account.raw 缺席）→ 🫥；有账户但 addOnQuota 读不出用量 → 🙂 中性。
-//    used/total 优先，percentage（0–100 制）兜底。气泡取 today。
+//  - mascot 阈值（P1.5 rekey）：剩余 >50% 🙂 / 20–50% 😐 / <20% 😨；v8 起剩余率先用
+//    quotaAgg（addOn + dedicated），不可得才回落 addOnQuota。无账户数据（account.raw 缺席）
+//    → 🫥；有账户但读不出用量 → 🙂 中性。used/total 优先，percentage（0–100 制）兜底。
 //  - T12 credits 校准（真机验收裁定，binding）：当前客户端 token 全 0、逐回合 credits 真实
 //    → credits 为本地口径主单位（scanner 已聚合）；consumption half 加「今日 N cr」行、
 //    full 各行带「 · N cr」；mascot 气泡 credits>0 显示 cr、否则回落 in/out（三元，见下）。
@@ -37,23 +40,23 @@
 //    标注「实扣未知」。credits 与 creditsBillable 不可互相加总。
 //  - 计费输入 tokens（用户裁定，接替死指标 tps）：token 字段中唯一有本地真值链的是
 //    usage.context_usage_ratio（平台真值）→ billedInput = Σ ratio×contextWindow（inspector
-//    公式；contextWindow 取 runtime-config，缺 → 200k 兜底加 ≈）。speed 模块整体替换为
-//    「速度/时长」（平均回合秒 + 计费输入 + cr/min，见模块内注释）；consumption/usage full
+//    公式；contextWindow 取 runtime-config，缺 → 200k 兜底）。speed 模块整体替换为
+//    「速度/时长」（平均回合秒 + 计费输入 + cr/min，见模块内注释）；consumption full
 //    行尾追加计费段。
 //
 // T13+ 用户裁定（strip v4 / 模型名 / 会话明细）：
 //  - 生成速度 tps（T16 口径，覆盖 T15）：**Output 真值优先，缺失才估算**——usage.output_tokens
 //    > 0 直接用真值；为 0（内置模型多数行）才用 est.mjs 正文估算（thinking/text/tool_use 块；
 //    est_tokens = CJK×1.3 + 其余÷3）。分母为 qodercli.log request 配对的**实测纯模型秒**（区间
-//    合并；无日志轮兜底 = 轮时长−工具时间）。估算值带 ~、全真值不带：speed 模块 full「生成速度
-//    N tps · 近30分钟」+ 诚实注记；strip 'tps' 迷你槽读会话 outTps30 / 末轮 outTps
+//    合并；无日志轮兜底 = 轮时长−工具时间）。展示一律一位小数、不加估算标记：speed 模块 full
+//    「生成速度 N.N tps · 近30分钟」+ 诚实注记；strip 'tps' 迷你槽读会话 outTps30 / 末轮 outTps
 //    （null → '-- tps'）。此前的输入速率字段（tps30/tps30Tokens）保留在 daemon 数据面但不再
-//    呈现；tokens 口径「输出」行同源用 outTok（真值优先，估算才带 ~）。
+//    呈现；tokens 口径「输出」行同源用 outTok（真值优先，缺失才估算）。
 //  - 模型名：runtime-config 顶层 model（真机 'qfmodel'）→ daemon 发布 local.session.model /
 //    local.sessions[].model；session 模块 full 增「模型」行 + strip 'model' 迷你槽（T14：解析名
 //    ≤18 字原样、超长加 '…'；未解析回落短句柄/id:<8>，绝不做中段标识符截断）。
 //  - 会话明细 sessions 模块（panel 专有）：state.local.sessions 每会话一行
-//    「<id8> · N cr · ≈Nk tok · R 轮 · Q 次 · <model>」（R=rounds，Q=requests）。
+//    「<id8> · N cr · Nk tok · R 轮 · Q 次 · <model>」（R=rounds，Q=requests）。
 //    strip v5 默认五槽（P2，均读 lastTurn）：['model','tokens','credits','tps','turnsec']。
 // dev-live：本模块由 widget.js 动态 import，URL 上的 ?v=rev 必须传给同伴模块，
 // 否则会解析出「未带 rev 的第二份 widget.js」——registerModule 落到另一个实例，
@@ -127,16 +130,15 @@ function withCreditTip(el, o, key, f) {
  * credits 主数字文本（用户反馈 §2，2026-10-28）：实扣 0 但名义 > 0 时出「0/名义」，
  * 否则裸「0 cr」会被误读为「这个会话没花 credits」——真机实况恰相反：全为免费量
  * （billable:false），实扣 0、名义几十上百。其余同 creditShown（实扣优先，缺失回落名义）。
- * fmtFn 供 strip 迷你槽换成 fmtNum 两位小数（面板走 fmtCredits）。null → '--'。
+ * 统一一位小数。null → '--'。
  */
-function creditText(f, o, key = 'credits', fmtFn) {
+function creditText(f, o, key = 'credits') {
   const v = creditShown(o, key);
   if (v === null) return '--';
-  const ff = typeof fmtFn === 'function' ? fmtFn : (x) => f.fmtCredits(x);
   const bill = o && typeof o === 'object' ? o[key + 'Billable'] : null;
   const nom = o && typeof o === 'object' ? o[key] : null;
-  if (isNum(bill) && bill === 0 && isNum(nom) && nom > 0) return `0/${ff(nom)}`;
-  return ff(v);
+  if (isNum(bill) && bill === 0 && isNum(nom) && nom > 0) return `0/${f.fmtCredits(nom)}`;
+  return f.fmtCredits(v);
 }
 
 function win(state, key) {
@@ -148,14 +150,12 @@ function win(state, key) {
 /**
  * 计费输入 tokens 派生段（窗口级，usage/consumption full 行共用）：
  * billedInput = scanner 派生真值 Σ(ratio × contextWindow)；null/非法（升级前缓存记录无
- * ratio）→ null → 调用方省略整段（不出 '≈--' 噪声）。billedInputSource ≠ 'runtime-config'
- * （'fallback200k'/'mixed'/乱值）→ 前缀 ≈（200k 兜底口径标注，inspector 约定）。
+ * ratio）→ null → 调用方省略整段（不出 '-- tok' 噪声）。值只做展示，不再附加估算标记。
  */
 function billedSeg(f, w) {
   const b = w ? w.billedInput : null;
   if (!isNum(b)) return null;
-  const approx = w.billedInputSource !== 'runtime-config';
-  return `${approx ? '≈' : ''}${f.fmtTokens(b)} tok`;
+  return `${f.fmtTokens(b)} tok`;
 }
 
 /** 优先用 widget 经 setFmt 注入的 ctx.fmt（接线可被集成测试真实检验），缺省回落直接 import。 */
@@ -257,39 +257,373 @@ function pctStyle(ratio) {
   return Math.round(clamped * 1000) / 10 + '%';
 }
 
-// ---------------------------------------------------------------- usage（P1.5：用量节奏）/ session（本会话，面板专有）
-// Qoder 无 5h/周额度上限——原 quota-5h/quota-week 假额度条（同一账户仪表双标题）按
-// 用户裁定删除。本模块保留其"信息面"并诚实改名：纯本地窗口用量数（credits 主单位），
-// 无 fill/百分比/徽标/倒计时——本地口径由模块标题「用量节奏」直接承担。
-// Strip layout v3（用户截图反馈裁定）：usage 无 slotIds/renderMini（面板 render 不变）；
-// strip 的 tokens/turnsec 两槽分别由 consumption/speed 服务，本会话信息全部移入 panel。
-const usage = {
-  id: 'usage',
-  title: '用量节奏',
-  supports: ['half', 'full'],
-  defaultSize: 'half',
+/** 两位小数（quotaAgg 合计用；逐份原始值不取整）。 */
+function round2(v) { return Math.round(v * 100) / 100; }
+
+/**
+ * 单个额度块 → {used,total,remaining}（三者必须都能得到才返回，否则 null）。
+ * 字段候选与 daemon/quotaPick.mjs 同规：quota_summary|quotaSummary 壳优先，再块自身；
+ * used|used_value|usedValue、total|total_value|totalValue|limit、remaining|remaining_value|remainingValue。
+ * 只有 total（或只有 percentage）→ null：拆不出已用/剩余，不猜。
+ */
+function packFieldsOf(block) {
+  const b = block && typeof block === 'object' && !Array.isArray(block) ? block : null;
+  if (!b) return null;
+  const s = [b.quota_summary, b.quotaSummary].find((x) => x && typeof x === 'object' && !Array.isArray(x)) || b;
+  const pick = (...keys) => {
+    for (const k of keys) if (isNum(s[k])) return s[k];
+    return null;
+  };
+  const total = pick('total', 'total_value', 'totalValue', 'limit');
+  if (total === null || total <= 0) return null;
+  let used = pick('used', 'used_value', 'usedValue');
+  let remaining = pick('remaining', 'remaining_value', 'remainingValue');
+  if (used === null && remaining !== null) used = total - remaining;
+  if (remaining === null && used !== null) remaining = total - used;
+  if (used === null || remaining === null) return null;
+  return { used, total, remaining };
+}
+
+/**
+ * 套餐资源包聚合（2026-10-30 用户反馈：分母漏 Qwen 专属积分）。
+ * 原生用量页把 addOnQuota + dedicatedResourcePackages[] 都算作资源包，用户实际可用额度
+ * 是两者之和；插件此前只读 addOnQuota → 1,778/2,000 = 89%，分母漏掉专属积分。
+ * 聚合 addOnQuota + 每个 dedicatedResourcePackages（**不**聚合 orgResourcePackage：原生页
+ * 未展示、无真机实据）；plan credits（userQuota）不是资源包，同样不计入。
+ * 返回 {used,total,remaining,ratio,parts:[{name,used,total,remaining}]}；ratio = 剩余/总量
+ * （4 位小数，与 barPcts 同规）。任一份缺 total/拆不出 used|remaining → 该份跳过；一个
+ * 可用份都没有 → null（调用方回落旧 addOn/pickPack 链，绝不猜）。首个含可用份的
+ * qoderUsage 壳即返回，避免 {usage,plan} 多壳重复累加。
+ */
+export function quotaAgg(account) {
+  const a = account && typeof account === 'object' ? account : null;
+  if (!a || !a.raw || typeof a.raw !== 'object') return null;
+  for (const qu of qoderShells(a.raw)) {
+    const parts = [];
+    const addOn = packFieldsOf(qu.addOnQuota);
+    if (addOn) parts.push({ name: '资源包', ...addOn });
+    const list = Array.isArray(qu.dedicatedResourcePackages) ? qu.dedicatedResourcePackages : [];
+    for (const p of list) {
+      const fields = packFieldsOf(p);
+      if (!fields) continue;
+      const nm = p && typeof p === 'object' && typeof p.name === 'string' && p.name.trim()
+        ? p.name.trim() : '专属资源包';
+      parts.push({ name: nm, ...fields });
+    }
+    if (!parts.length) continue;
+    let used = 0;
+    let total = 0;
+    let remaining = 0;
+    for (const p of parts) { used += p.used; total += p.total; remaining += p.remaining; }
+    if (!(total > 0)) continue;
+    return {
+      used: round2(used), total: round2(total), remaining: round2(remaining),
+      ratio: Math.round(clamp01(remaining / total) * 10000) / 10000,
+      parts,
+    };
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------- pulse（用量波形）/ turnspeed（逐轮生成速度）
+// v8（2026-10-30 用户裁定，批准静态预览）：两块都是 panel 专有 full 卡片（无 strip 槽）。
+// pulse 数据源 = state.local.active.pulse（daemon pulseOf 按当前会话分桶）：三页签
+// 近1小时/近24小时/全程（默认全程，信息量最大）+ 名义合计/实扣/峰值 + SVG 面积波形
+// （峰值点）+ 起止轴 + 每格脚注。credits 口径画名义 credits；tokens 口径（BYOK）无 credits
+// 可画 → 纵轴与统计自动换为输出量（输出合计/峰值/每格）。页签选择是模块内存态（重渲染保留）。
+// 空态三态如实说明原因，绝不回落其它会话数据。
+// turnspeed 数据源 = state.local.active.turnSpeeds（daemon turnSpeedsOf）：每模型一行
+// 「可测/参与轮 · 平均 tps · min–max」+ 每轮一根柱（按该模型最高轮归一，虚线 = 平均）。
+// 平均 = 各轮 tps 算术平均；strip tps 槽的口径是按实测秒加权——脚注明示两者不同。
+let pulseRange = 'all';
+// v8.1（2026-10-30 用户追加）：逐轮柱点选态——{sessionId, model, ts}。模块内存态（与波形页签
+// 同机制），10s 轮询重渲染后保留；切会话 / 该轮滚出窗口或不再可测 → 自动失效，绝不跨会话残留。
+let tpsPick = null;
+const PULSE_TABS = [['h1', '近1小时'], ['h24', '近24小时'], ['all', '全程']];
+
+/** 建 SVG 节点（classList 在真机 SVGElement 上可用；className 赋值在 SVG 上是只读的）。 */
+function sv(tag, className) {
+  const el = globalThis.document.createElementNS('http://www.w3.org/2000/svg', tag);
+  if (className) el.classList.add(className);
+  return el;
+}
+
+const pad2 = (n) => (n < 10 ? '0' + n : String(n));
+
+/** 时刻文本：withDate → 'MM/DD HH:MM'；否则 'HH:MM'（本地时区，与底栏「分析」列同习惯）。 */
+function clockOf(ts, withDate) {
+  if (!isNum(ts)) return '--';
+  const d = new Date(ts);
+  const hm = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  return withDate ? `${pad2(d.getMonth() + 1)}/${pad2(d.getDate())} ${hm}` : hm;
+}
+
+/** 分桶步长 → 人话（'12 小时'/'30 分钟'/'1 分钟'）。 */
+function stepText(ms) {
+  if (!isNum(ms) || ms <= 0) return '--';
+  if (ms >= 3_600_000) return `${Math.round(ms / 3_600_000)} 小时`;
+  if (ms >= 60_000) return `${Math.round(ms / 60_000)} 分钟`;
+  return `${Math.round(ms / 1000)} 秒`;
+}
+
+/**
+ * 波形 SVG（viewBox 0 0 644 96，宽高比由 CSS 拉伸）：面积 + 折线 + 三档网格 + 基线 + 峰值点。
+ * vals 全 0（窗口无用量）→ 平线贴底、无峰值点；n ≤ 1 → 单点居中。颜色全走 CSS 变量
+ * （.qum-pulse-* 类），浅/深色主题自动跟随。
+ */
+function pulseWave(vals) {
+  const width = 644;
+  const height = 96;
+  const padT = 10;
+  const padB = 8;
+  const base = height - padB;
+  const n = Array.isArray(vals) ? vals.length : 0;
+  let peak = 0;
+  for (const v of vals || []) if (isNum(v) && v > peak) peak = v;
+  const svg = sv('svg', 'qum-pulse-wave');
+  svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+  svg.setAttribute('preserveAspectRatio', 'none');
+  svg.setAttribute('role', 'img');
+  const defs = sv('defs');
+  const grad = sv('linearGradient');
+  grad.setAttribute('id', 'qum-pulse-grad');
+  grad.setAttribute('x1', '0');
+  grad.setAttribute('y1', '0');
+  grad.setAttribute('x2', '0');
+  grad.setAttribute('y2', '1');
+  const stopA = sv('stop', 'qum-pulse-stop-a');
+  stopA.setAttribute('offset', '0');
+  const stopB = sv('stop', 'qum-pulse-stop-b');
+  stopB.setAttribute('offset', '1');
+  grad.append(stopA, stopB);
+  defs.append(grad);
+  svg.append(defs);
+  for (const t of [0.25, 0.5, 0.75]) {
+    const gy = (padT + t * (base - padT)).toFixed(1);
+    const grid = sv('line', 'qum-pulse-grid');
+    grid.setAttribute('x1', '0');
+    grid.setAttribute('x2', String(width));
+    grid.setAttribute('y1', gy);
+    grid.setAttribute('y2', gy);
+    svg.append(grid);
+  }
+  const x = (i) => (n <= 1 ? width / 2 : (i / (n - 1)) * (width - 2) + 1);
+  const y = (v) => (peak > 0 ? padT + (1 - v / peak) * (base - padT) : base);
+  if (n > 0) {
+    const pts = vals.map((v, i) => [x(i), y(isNum(v) ? v : 0)]);
+    const lineD = pts.map(([px, py], i) => `${i ? 'L' : 'M'}${px.toFixed(1)},${py.toFixed(1)}`).join(' ');
+    const areaD = `M${pts[0][0].toFixed(1)},${base} `
+      + pts.map(([px, py]) => `L${px.toFixed(1)},${py.toFixed(1)}`).join(' ')
+      + ` L${pts[n - 1][0].toFixed(1)},${base} Z`;
+    const area = sv('path', 'qum-pulse-area');
+    area.setAttribute('d', areaD);
+    const lineEl = sv('path', 'qum-pulse-line');
+    lineEl.setAttribute('d', lineD);
+    svg.append(area, lineEl);
+  }
+  const baseline = sv('line', 'qum-pulse-base');
+  baseline.setAttribute('x1', '0');
+  baseline.setAttribute('x2', String(width));
+  baseline.setAttribute('y1', String(base));
+  baseline.setAttribute('y2', String(base));
+  svg.append(baseline);
+  if (peak > 0) {
+    let pi = 0;
+    for (let i = 0; i < vals.length; i++) if (vals[i] === peak) { pi = i; break; }
+    const dot = sv('circle', 'qum-pulse-peak');
+    dot.setAttribute('cx', x(pi).toFixed(1));
+    dot.setAttribute('cy', y(peak).toFixed(1));
+    dot.setAttribute('r', '2.8');
+    svg.append(dot);
+  }
+  return svg;
+}
+
+const pulse = {
+  id: 'pulse',
+  title: '用量波形',
+  supports: ['full'],
+  defaultSize: 'full',
   render(ctx) {
     const f = fmtOf(ctx);
     const st = ctx.state;
-    const tk = tokensMode(st); // token 口径：真实 in/out，不出 cr、不出 ≈ 估算段
-    const box = h('div', 'qum-usage');
-    const row = (label, key) => {
-      const w = win(st, key);
-      if (tk) return line(label, ioText(f, w));
-      let v = `${creditText(f, w)} cr`;
-      // token 非零才追加 in/out 段（真机现写 0）；格式沿用 consumption 行。
-      const inp = w ? w.input : null;
-      const out = w ? w.output : null;
-      if ((isNum(inp) && inp > 0) || (isNum(out) && out > 0)) {
-        v += ` · ${f.fmtK(inp)} in / ${f.fmtK(out)} out`;
+    const box = h('div', 'qum-pulse');
+    const act = activeOf(st);
+    if (!act) {
+      box.append(h('div', 'qum-note', '未识别当前会话（客户端未暴露会话身份）'));
+      return box;
+    }
+    const sess = activeSess(st);
+    if (!sess) {
+      box.append(h('div', 'qum-note', '本会话暂无回合'));
+      return box;
+    }
+    const data = act.pulse && typeof act.pulse === 'object' && !Array.isArray(act.pulse) ? act.pulse : null;
+    if (!data) {
+      box.append(h('div', 'qum-note', '回合未落盘 usage'));
+      return box;
+    }
+    const tk = activeMode(st);
+    const chipText = `本会话 · ${modelDisplay(st, sess) || '--'}`;
+    const paint = () => {
+      const key = PULSE_TABS.some(([k]) => k === pulseRange) ? pulseRange : 'all';
+      const w = data[key] && typeof data[key] === 'object' ? data[key] : null;
+      if (!w) {
+        box.replaceChildren(h('div', 'qum-note', '回合未落盘 usage'));
+        return;
       }
-      // 计费输入紧凑段（派生真值）：真机 token 全 0 时行形态即「近5小时 0 cr · ≈45k tok」
-      const seg = billedSeg(f, w);
-      if (seg) v += ` · ${seg}`;
-      return withCreditTip(line(label, v), w, 'credits', f);
+      const body = h('div', 'qum-pulse-body');
+      // 页签 + 会话 chip
+      const tool = h('div', 'qum-pulse-tool');
+      const tabs = h('div', 'qum-pulse-tabs');
+      for (const [k, label] of PULSE_TABS) {
+        const tab = h('span', k === key ? 'qum-pulse-tab on' : 'qum-pulse-tab', label);
+        tab.addEventListener('click', () => {
+          if (pulseRange === k) return;
+          pulseRange = k;
+          paint();
+        });
+        tabs.append(tab);
+      }
+      tool.append(tabs, h('span', 'qum-pulse-chip', chipText));
+      // 统计（credits：名义合计/实扣/峰值；tokens：输出合计/峰值/每格）
+      const stats = h('div', 'qum-pulse-stats');
+      const stat = (label, value) => {
+        const d = h('div', 'qum-pulse-stat');
+        d.append(h('div', 'qum-pulse-stat-label', label), h('div', 'qum-pulse-stat-value', value));
+        return d;
+      };
+      if (tk) {
+        stats.append(
+          stat('输出合计', `${f.fmtTokens(w.outTotal)} tok`),
+          stat('峰值', `${f.fmtTokens(w.peakOut)} tok`),
+          stat('每格', stepText(w.step)),
+        );
+      } else {
+        const cr = (v) => `${isNum(v) ? f.fmtCredits(v) : '--'} cr`;
+        stats.append(stat('名义合计', cr(w.total)), stat('实扣', cr(w.billTotal)), stat('峰值', cr(w.peak)));
+      }
+      const vals = tk ? w.outs : w.vals;
+      const axis = h('div', 'qum-pulse-axis');
+      axis.append(
+        h('span', null, key === 'h1' ? clockOf(w.from, false) : clockOf(w.from, true)),
+        h('span', null, `现在 ${clockOf(w.to, false)}`),
+      );
+      const foot = h('div', 'qum-pulse-foot', tk
+        ? `每格 ${stepText(w.step)} · 输出 tokens（真值优先，缺失取正文估算）· 无 credits 时纵轴自动换为输出量`
+        : `每格 ${stepText(w.step)} · 名义 credits（含免扣）· 本窗口实扣 ${isNum(w.billTotal) ? f.fmtCredits(w.billTotal) : '--'} cr / 免扣 ${isNum(w.freeTotal) ? f.fmtCredits(w.freeTotal) : '--'} cr`);
+      body.append(tool, stats, pulseWave(vals), axis, foot);
+      box.replaceChildren(body);
     };
-    if (ctx.size === 'full') box.append(row('近5小时', 'window5h'), row('本周', 'week'));
-    else box.append(row('近5小时', 'window5h')); // 去重（修订②）：half 与 full 首行同规（今日归「token 消耗」）
+    paint();
+    return box;
+  },
+};
+
+const turnspeed = {
+  id: 'turnspeed',
+  title: '逐轮生成速度',
+  supports: ['full'],
+  defaultSize: 'full',
+  render(ctx) {
+    const f = fmtOf(ctx);
+    const st = ctx.state;
+    const box = h('div', 'qum-turnspeed');
+    const act = activeOf(st);
+    if (!act) {
+      box.append(h('div', 'qum-note', '未识别当前会话（客户端未暴露会话身份）'));
+      return box;
+    }
+    const sess = activeSess(st);
+    if (!sess) {
+      box.append(h('div', 'qum-note', '本会话暂无回合'));
+      return box;
+    }
+    const d = act.turnSpeeds && typeof act.turnSpeeds === 'object' && !Array.isArray(act.turnSpeeds)
+      ? act.turnSpeeds : null;
+    const rows = d && Array.isArray(d.rows) ? d.rows : [];
+    if (!rows.length) {
+      box.append(h('div', 'qum-note', '回合未落盘 usage'));
+      return box;
+    }
+    const tool = h('div', 'qum-pulse-tool');
+    tool.append(
+      h('span', 'qum-tps-chip', `本会话 · ${f.fmtNum(d.totalTurns, 0)} 轮 · ${f.fmtNum(d.timedTurns, 0)} 轮可测`),
+      h('span', 'qum-tps-chip', '按平均 tps 降序'),
+    );
+    const sid = activeSidOf(st);
+    if (tpsPick && tpsPick.sessionId !== sid) tpsPick = null; // 切会话 → 旧选中失效
+    const paint = () => {
+      const kids = [tool];
+      let hit = false;
+      for (const r of rows) {
+        if (!r || typeof r !== 'object') continue;
+        const max = isNum(r.max) && r.max > 0 ? r.max : 1;
+        const row = h('div', 'qum-tps-row');
+        const name = modelDisplay(st, r) || '--';
+        const head = h('div', 'qum-tps-head');
+        head.append(
+          h('span', 'qum-tps-name', name),
+          // 名称与 meta 之间保留一个空格节点：纯文本拼接时避免「Mimo-V2.6」+「1/1」读成 2.61
+          h('span', 'qum-tps-gap', ' '),
+          h('span', 'qum-tps-meta', r.timed > 0
+            ? `${f.fmtNum(r.timed, 0)}/${f.fmtNum(r.turns, 0)} 轮 · 平均 ${f.fmtNum(r.mean, 1)} tps · ${f.fmtNum(r.min, 0)}–${f.fmtNum(r.max, 0)}`
+            : `${f.fmtNum(r.turns, 0)}/${f.fmtNum(r.turns, 0)} 轮 · 无实测秒（-- tps）`),
+        );
+        const series = Array.isArray(r.series) ? r.series : [];
+        const selIdx = tpsPick && tpsPick.sessionId === sid
+          && (r.model ?? null) === (tpsPick.model ?? null)
+          ? series.findIndex((pt) => pt && pt.ts === tpsPick.ts) : -1;
+        if (selIdx !== -1) hit = true;
+        // v8.1：点选/再点取消；paint 就地重绘（读数随行、行高即时变化）
+        const toggle = (pt) => {
+          if (!pt) return;
+          const same = tpsPick && tpsPick.sessionId === sid
+            && (r.model ?? null) === (tpsPick.model ?? null) && tpsPick.ts === pt.ts;
+          tpsPick = same ? null : { sessionId: sid, model: r.model ?? null, ts: pt.ts };
+          paint();
+        };
+        const bars = h('div', 'qum-tps-bars');
+        if (r.timed > 0 && isNum(r.mean)) {
+          const mean = h('span', 'qum-tps-mean');
+          mean.style.bottom = `${Math.min(100, Math.max(0, (r.mean / max) * 100)).toFixed(1)}%`;
+          bars.append(mean);
+        }
+        series.forEach((pt, i) => {
+          const tps = pt && isNum(pt.tps) ? pt.tps : 0;
+          const bar = h('i', 'qum-tps-bar' + (tps === r.max ? ' p' : '') + (i === selIdx ? ' on' : ''));
+          bar.style.height = `${Math.max(2, (tps / max) * 100).toFixed(1)}%`;
+          bar.title = `${name} · 第 ${i + 1} 轮 · ${f.fmtNum(tps, 1)} tps`;
+          bar.setAttribute('role', 'button');
+          bar.setAttribute('tabindex', '0');
+          bar.setAttribute('aria-pressed', i === selIdx ? 'true' : 'false');
+          bar.setAttribute('aria-label',
+            `${name} · 第 ${i + 1} 轮 · ${clockOf(pt && pt.ts, false)} · ${f.fmtNum(tps, 1)} tps`);
+          bar.addEventListener('click', () => toggle(pt));
+          bar.addEventListener('keydown', (ev) => {
+            if (!ev || (ev.key !== 'Enter' && ev.key !== ' ' && ev.key !== 'Spacebar')) return;
+            if (typeof ev.preventDefault === 'function') ev.preventDefault();
+            toggle(pt);
+          });
+          bars.append(bar);
+        });
+        row.append(head, bars);
+        if (selIdx !== -1) {
+          const pt = series[selIdx];
+          row.append(h('div', 'qum-tps-pick',
+            `第 ${selIdx + 1} 轮 · ${clockOf(pt.ts, false)} · ${f.fmtNum(pt.tps, 1)} tps`));
+        }
+        kids.push(row);
+      }
+      if (!hit) tpsPick = null; // 该轮滚出窗口 / 不再可测 → 失效
+      if (d.timedTurns === 0) {
+        kids.push(h('div', 'qum-note', '本会话回合未配对日志实测秒，逐轮 tps 无法测算'));
+      }
+      kids.push(h('div', 'qum-tps-foot',
+        '每根柱 = 一轮（时间序）· 柱高按该模型最高轮归一 · 平均 = 各轮 tps 算术平均 · 「当前会话」行的 tps 是按实测秒加权，两者口径不同 · 点柱查看该轮 tps 与回合开始时间'));
+      box.replaceChildren(...kids);
+    };
+    paint();
     return box;
   },
 };
@@ -298,8 +632,8 @@ const usage = {
 // {id, credits, turns, rateCpm30, billedInput, avgTurnSec, model, tps30}。Strip layout v4（用户裁定）：
 // session 经 slotIds:['model'] 提供 strip「模型」迷你槽（当前会话解析名 ≤18 字，未解析回落短句柄/
 // id:<8>，null → '--'）；
-// 会话其余信息只留展开面板。面板 full 五行事实：本会话（实扣 cr · 轮 · 次）、近30分钟 cr/min、计费输入 tok
-//（≈ 判定同 speed）、会话 id 前 8 字、模型（T13 新增）；half 单行：本会 cr。平均耗时只归「吞吐/时长」
+// 会话其余信息只留展开面板。面板 full 五行事实：本会话（实扣 cr · 轮 · 次）、近30分钟 cr/min、
+// 计费输入 tok、会话 id 前 8 字、模型（T13 新增）；half 单行：本会 cr。平均耗时只归「吞吐/时长」
 //（P2 去重，修订②）。full 行清单末尾 + byModel 表（每模型一行；空 → 暂无模型明细）。
 // 防御：state.local.session 缺失/乱值（升级前 daemon 快照）→ full「暂无数据」、half 单行 '--'，绝不抛。
 function sessOf(state) {
@@ -475,12 +809,10 @@ function modelByok(state, session) {
 /** 短句柄形态（内建模型 id，如 'qfmodel'）：首字符字母 + 1..20 个 [a-z0-9._-]。 */
 const MODEL_HANDLE_RE = /^[a-z][a-z0-9._-]{1,20}$/i;
 
-/** 计费输入 tokens 段（会话级）：billedInput + contextWindow.source 定 ≈（同 speed/billedSeg 约定）。 */
-function sessBilledSeg(f, s, state) {
+/** 计费输入 tokens 段（会话级）：只展示 billedInput，不再附加估算标记。 */
+function sessBilledSeg(f, s) {
   const b = s ? s.billedInput : null;
-  const cw = state && state.local && state.local.contextWindow;
-  const approx = !cw || cw.source !== 'runtime-config';
-  return `${isNum(b) && approx ? '≈' : ''}${f.fmtTokens(b)} tok`;
+  return `${f.fmtTokens(b)} tok`;
 }
 
 const session = {
@@ -492,19 +824,17 @@ const session = {
   // 进面板，否则真机不可达。half 形态保留（供未来编辑模式/窄布局）。
   defaultSize: 'full',
   // v7（2026-10-26 用户裁定：对齐客户端原生底栏）：session 重新拥有 strip 迷你槽，形态是
-  // 「会话簇」——[≈]N万 tok · [N% 命中] · N 轮 · N 次（轮=rounds，次=requests）。
-  // tokens 口径（BYOK）用提示输入总量（input 已含 cacheRead）真实值且无 ≈；credits 口径用
-  // billedInput（≈ 仅 contextWindow 非 runtime-config）。命中率缺失 → 整段省略（不补 0%）。无会话 → '--'。
+  // 「会话簇」——N万 tok · [N% 命中] · N 轮 · N 次（轮=rounds，次=requests）。
+  // tokens 口径（BYOK）用提示输入总量（input 已含 cacheRead）真实值；credits 口径用
+  // billedInput。命中率缺失 → 整段省略（不补 0%）。无会话 → '--'。
   slotIds: ['session'],
   renderMini(ctx) {
     const f = fmtOf(ctx);
     const s = activeSess(ctx && ctx.state);
     if (!s) return h('span', 'qum-mini', '--');
     const tk = activeMode(ctx.state);
-    const cw = ctx.state && ctx.state.local && ctx.state.local.contextWindow;
-    const approx = !tk && (!cw || cw.source !== 'runtime-config');
     const tok = tk ? realPrompt(s) : s.billedInput;
-    const parts = [`${approx && isNum(tok) ? '≈' : ''}${f.fmtCompact(tok)} tok`];
+    const parts = [`${f.fmtCompact(tok)} tok`];
     if (isNum(s.cacheHitRate)) parts.push(`${f.fmtPct(s.cacheHitRate)} 命中`);
     parts.push(`${isNum(s.rounds) ? f.fmtNum(s.rounds, 0) : '--'} 轮`);
     parts.push(`${isNum(s.requests) ? f.fmtNum(s.requests, 0) : '--'} 次`);
@@ -544,23 +874,22 @@ const session = {
     const scale = `${rounds} 轮${req}`;
     if (tk) {
       // 真实 token 三明细（BYOK 本地真值）：未命中输入 / 缓存命中读 / 输出（T16：输出真值优先，
-      // 无真值才估算）；速度行 = T16 生成速度 outTps30（最佳输出 ÷ 实测秒，估算才带 ~）。
+      // 无真值才估算）；速度行 = T16 生成速度 outTps30（最佳输出 ÷ 实测秒）。
       box.append(line('本会话', `${f.fmtTokens(realPrompt(s))} tok · ${scale}`));
-      box.append(line('生成速度', tpsText(f, isNum(s.outTps30) ? s.outTps30 : null, s.outTps30Exact === true)));
+      box.append(line('生成速度', tpsText(f, isNum(s.outTps30) ? s.outTps30 : null)));
       box.append(line('输入未命中', `${f.fmtTokens(uncachedInput(s))} tok`));
       box.append(line('缓存命中', `${f.fmtTokens(s.cacheRead)} tok`));
-      // Output 最佳值：真值优先（usage.output_tokens > 0），无真值才带 ~ 估算；旧 state 回落 outEst。
+      // Output 最佳值：usage 真值优先，无真值才用正文估算；旧 state 回落 outEst。
       const outBest = isNum(s.outTok) ? s.outTok : isNum(s.outEst) ? s.outEst : null;
-      const outApprox = !(isNum(s.outTok) && s.outExact === true);
       box.append(line('输出', outBest !== null
-        ? `${outApprox ? '~' : ''}${f.fmtTokens(outBest)} tok`
+        ? `${f.fmtTokens(outBest)} tok`
         : `${f.fmtTokens(s.output)} tok`));
     } else {
       box.append(withCreditTip(
         line('本会话', `${creditText(f, s)} cr · ${scale}`), s, 'credits', f));
       box.append(withCreditTip(
         line('近30分钟', `${creditText(f, s, 'rateCpm30')} cr/min`), s, 'rateCpm30', f));
-      box.append(line('计费输入', sessBilledSeg(f, s, ctx.state)));
+      box.append(line('计费输入', sessBilledSeg(f, s)));
     }
     box.append(line('会话', typeof s.id === 'string' && s.id ? s.id.slice(0, 8) : '--'));
     // T13/T14：模型行显示解析后的人类名（server 落盘 modelName）；BYOK 目录条目 byok:true → 追加
@@ -578,7 +907,7 @@ const session = {
 // sessions（会话明细，用户裁定 T13，面板专有）：数据源 state.local.sessions = daemon sessionsSummary
 // 产出（≤10 会话，已按 lastTs 降序；每项 {id, model, credits, creditsBillable, creditsFree,
 // billedInput, billedSource, turns, rounds, requests, lastTs, avgTurnSec}）。每会话一行
-// 「<id8> · N cr · ≈Nk tok · R 轮 · Q 次 · <model>」——≈ 仅当该会话
+// 「<id8> · N cr · Nk tok · R 轮 · Q 次 · <model>」——tok 仅当该会话
 // billedSource 为 fallback200k/mixed（inspector 口径）；full = 逐行（≤10）；half =「近 N 个会话」+
 // 首行（最近活跃）。防御（用户裁定）：源缺失/乱值/空表 → 一行「暂无数据」；单项字段 null → 该段 '--'
 // （行不消失）；fmtCredits/fmtTokens 对 null 已出 '--'，model 缺失 → '--'。无 renderMini（非 strip 槽）。
@@ -595,8 +924,8 @@ function rowTokensMode(state, o) {
   return tokensMode(state);
 }
 
-/** 单会话行文本（full/half 共用）：credits 行 `<id8> · N cr · [≈]Nk tok · R 轮 · Q 次 · <model>`；
- * tokens 行（BYOK，行自身 billingMode='tokens'，缺字段跟随全局口径）去 cr 段、tok 用真实总量（无 ≈）。
+/** 单会话行文本（full/half 共用）：credits 行 `<id8> · N cr · Nk tok · R 轮 · Q 次 · <model>`；
+ * tokens 行（BYOK，行自身 billingMode='tokens'，缺字段跟随全局口径）去 cr 段、tok 用真实总量。
  * R=rounds（用户轮次），Q=requests（去重请求）；旧 daemon 无 rounds → '-- 轮'（绝不拿记录数冒充轮）。
  * T14：model 段用解析后的人类名（server 落盘 modelName），未解析回落短句柄/id:<8>。 */
 function sessionRowText(f, state, s) {
@@ -608,9 +937,7 @@ function sessionRowText(f, state, s) {
   const mdisp = modelDisplay(state, o);
   const model = mdisp === null ? '--' : mdisp;
   if (rowTk) return `${id8} · ${f.fmtTokens(realPrompt(o))} tok · ${rounds}${req} · ${model}`;
-  const approx = o.billedSource === 'fallback200k' || o.billedSource === 'mixed';
-  const tok = `${approx ? '≈' : ''}${f.fmtTokens(o.billedInput)} tok`;
-  return `${id8} · ${creditText(f, o)} cr · ${tok} · ${rounds}${req} · ${model}`;
+  return `${id8} · ${creditText(f, o)} cr · ${f.fmtTokens(o.billedInput)} tok · ${rounds}${req} · ${model}`;
 }
 
 /** 单会话行元素（credits tooltip；tokens 口径不挂 cr 说明）。 */
@@ -623,13 +950,13 @@ function sessionRowEl(f, state, s) {
   return el;
 }
 
-/** 生成速度显示：有值 → '[~]N.N tps'（exact=true 时无 ~，真值）；null/乱值 → '-- tps'。 */
-function tpsText(f, v, exact = false) {
-  return isNum(v) ? `${exact ? '' : '~'}${f.fmtNum(v, 1)} tps` : '-- tps';
+/** 生成速度显示：有值 → 'N.N tps'（一位小数）；null/乱值 → '-- tps'。 */
+function tpsText(f, v) {
+  return isNum(v) ? `${f.fmtNum(v, 1)} tps` : '-- tps';
 }
 
 /** byModel 单模型行文本（session full 表与会话明细展开行共用，spec §4.5）：
- * `名[(byok)] · [--/N] cr · [≈]N tok · ~N.N tps · Ns · N 轮`；行自身口径优先，缺字段逐段 '--'。 */
+ * `名[(byok)] · [--/N] cr · N tok · N.N tps · Ns · N 轮`；行自身口径优先，缺字段逐段 '--'。 */
 function byModelRowText(f, state, m) {
   const o = m && typeof m === 'object' ? m : {};
   const disp = modelDisplay(state, o);
@@ -637,13 +964,12 @@ function byModelRowText(f, state, m) {
   const rowTk = rowTokensMode(state, o);
   // byModel.turns = 该模型参与的轮数（scanner byModelOf 口径），故标「轮」。
   const turns = isNum(o.turns) ? String(Math.round(o.turns)) : '--';
-  const outTps = tpsText(f, o.outTps, o.outTpsExact === true);
-  const avg = isNum(o.avgTurnSec) ? `${Math.round(o.avgTurnSec)}s` : '--';
+  const outTps = tpsText(f, o.outTps);
+  const avg = isNum(o.avgTurnSec) ? `${f.fmtNum(o.avgTurnSec, 1)}s` : '--';
   const crSeg = rowTk ? '-- cr' : `${creditText(f, o)} cr`;
-  const approx = o.billedSource === 'fallback200k' || o.billedSource === 'mixed';
   const tokSeg = rowTk
     ? `${f.fmtTokens(realPrompt(o))} tok`
-    : `${approx ? '≈' : ''}${f.fmtTokens(o.billedInput)} tok`;
+    : `${f.fmtTokens(o.billedInput)} tok`;
   return `${name} · ${crSeg} · ${tokSeg} · ${outTps} · ${avg} · ${turns} 轮`;
 }
 
@@ -827,8 +1153,8 @@ function modelsCard(f, state, r, i, max, sum) {
     cell('今日', cToday === null ? '-' : `${creditText(f, r, 'creditsToday')} cr`),
     cell('近7日', c7 === null ? '-' : `${creditText(f, r, 'credits7d')} cr`),
     cell('Tokens', f.fmtTokens(tokenSum(r))),
-    cell('时延/回合', isNum(r.avgTurnSec) ? `${Math.round(r.avgTurnSec)}s/回合` : '-'),
-    cell('占比', c7 === null || !isNum(sum) || sum <= 0 ? '-' : `${Math.round(c7 / sum * 100)}%`),
+    cell('时延/回合', isNum(r.avgTurnSec) ? `${f.fmtNum(r.avgTurnSec, 1)}s/回合` : '-'),
+    cell('占比', c7 === null || !isNum(sum) || sum <= 0 ? '-' : f.fmtPct(c7 / sum)),
   );
   card.append(cols);
   if (c7 !== null && isNum(max) && max > 0) { // credits7d null → 不画条
@@ -902,20 +1228,20 @@ const consumption = {
   defaultSize: 'half',
   slotIds: ['tokens', 'credits'],
   // Strip layout v7（2026-10-26 用户裁定）：tokens 槽仍是「最新一轮计费输入」（credits 口径
-  // [≈]billedInput，≈ 仅 source 非 runtime-config；tokens 口径 = 该轮提示输入总量（input 已含
-  // cacheRead），无 ≈）；credits 槽改为「会话累计实扣 credits」（active.session.creditsBillable，两位小数
-  // 裁尾零）——原生底栏的 credits 是会话级口径，不是末轮。tokens 口径下 credits 不存在 → '-- cr'。
+  // billedInput；tokens 口径 = 该轮提示输入总量（input 已含
+  // cacheRead），credits 槽改为「会话累计实扣 credits」（active.session.creditsBillable，
+  // 一位小数）——原生底栏的 credits 是会话级口径，不是末轮。tokens 口径下 credits 不存在 → '-- cr'。
   // 口径按该轮 billingMode（lt.billingMode ?? 全局）。lastTurn 缺 → tokens 槽 '-- tok' 占位
-  // （整条空态「暂无回合数据」由 widget.renderStrip 承担），绝不出「≈--」噪声。
+  // （整条空态「暂无回合数据」由 widget.renderStrip 承担），绝不出 '-- tok' 噪声。
   renderMini(ctx) {
     const f = fmtOf(ctx);
     const lt = activeLt(ctx && ctx.state); // P3：读活动会话末轮
     if (ctx && ctx.slot === 'credits') {
       const s = activeSess(ctx && ctx.state);
       const c = creditShown(s);
-      // 实扣 0 / 名义 > 0 → 「0/57.98 cr」（用户反馈 §2：裸 0 会被误读为没花钱）
+      // 实扣 0 / 名义 > 0 → 「0/57.98 cr」（用户反馈 §2：裸 0 会被误读为没花钱）；一位小数。
       const v = s && !activeMode(ctx.state) && isNum(c)
-        ? `${creditText(f, s, 'credits', (x) => f.fmtNum(x, 2))} cr` : '-- cr';
+        ? `${creditText(f, s)} cr` : '-- cr';
       const el = h('span', 'qum-mini', v);
       if (isNum(c) && !activeMode(ctx.state)) {
         const tip = creditTip(s, 'credits', f);
@@ -928,8 +1254,7 @@ const consumption = {
       return h('span', 'qum-mini', `${f.fmtNum(realPrompt(lt), 0)} tok`);
     }
     if (!lt || !isNum(lt.billedInput)) return h('span', 'qum-mini', '-- tok');
-    const approx = lt.billedSource !== 'runtime-config' ? '≈' : '';
-    return h('span', 'qum-mini', `${approx}${f.fmtNum(lt.billedInput, 0)} tok`);
+    return h('span', 'qum-mini', `${f.fmtNum(lt.billedInput, 0)} tok`);
   },
   render(ctx) {
     const f = fmtOf(ctx);
@@ -942,7 +1267,7 @@ const consumption = {
     };
     const row = (label, key) => {
       const w = win(st, key);
-      if (tk) return line(label, ioText(f, w)); // 真实 in/out（BYOK 本地真值），无 cr / 无 ≈ 段
+      if (tk) return line(label, ioText(f, w)); // 真实 in/out（BYOK 本地真值），无 cr 段
       const io = `${f.fmtK(w && w.input)} in / ${f.fmtK(w && w.output)} out`;
       if (ctx.size !== 'full') return withCreditTip(line(label, io), w, 'credits', f);
       // full 行尾依次：credits（T12 主单位，实扣优先）→ 计费输入 tokens（派生真值，null 省略段）
@@ -994,12 +1319,12 @@ const cache = {
 
 // speed（T16 口径：最佳 Output ÷ 实测纯模型秒，见 daemon/est.mjs）：面板数据源 state.local.session。
 // 本模块经 slotIds:['tps','turnsec'] 提供两个 strip 迷你槽（v5，全读 state.local.lastTurn 最新一轮）
-// ——「tps」= 该轮生成速度 outTps「[~]N.N tps」（估算才带 ~；null → '-- tps'，两种计费口径统一）；
+// ——「tps」= 生成速度 outTps「N.N tps」（null → '-- tps'，两种计费口径统一）；
 // 「turnsec」= 该轮耗时 turnSec「N.N s」。标题「吞吐/时长」（模块仍含回合时长面），id 与注册序不变。
-//  - full：「最新一轮 N s」、「平均回合 N s」、「总耗时」、「生成速度 [~]N tps · 近30分钟」
+//  - full：「最新一轮 N.N s」、「平均回合 N.N s」、「总耗时」、「生成速度 N.N tps · 近30分钟」
 //    （outTps30 = 窗内已配对最佳输出 ÷ 实测秒；null → '-- tps'）、「近30分钟 X cr/min」（仅 credits
 //    口径）＋ 一行诚实说明（估算口径 + 无日志兜底）；
-//  - half：「均 Ns」紧凑一行；mini（v5）：tps 槽「[~]N.N tps」/「-- tps」、turnsec 槽「N.N s」/「--」。
+//  - half：「均 N.Ns」紧凑一行；mini（v5）：tps 槽「N.N tps」/「-- tps」、turnsec 槽「N.N s」/「--」。
 //    旧 state（无 lastTurn 派生字段）→ '-- tps'，绝不抛。
 const speed = {
   id: 'speed',
@@ -1010,8 +1335,8 @@ const speed = {
   defaultSize: 'full',
   slotIds: ['turnsec', 'tps'],
   // Strip layout v7（2026-10-26 用户裁定：对齐客户端原生底栏）：tps 槽 = 会话近30分钟生成速度
-  // outTps30「⚡ [~]N.N t/s」（真值无 ~；缺失/非数 → 回落末轮 outTps，仍缺失 → '⚡ -- t/s'，
-  // 绝不编造 0）；turnsec 槽 = 末轮耗时 turnSec（一位小数，秒为单位绝无 min；null → '--'）。
+  // outTps30「⚡ N.N t/s」（缺失/非数 → 回落末轮 outTps，仍缺失 → '⚡ -- t/s'，绝不编造 0）；
+  // turnsec 槽 = 末轮耗时 turnSec（一位小数，秒为单位绝无 min；null → '--'）。
   renderMini(ctx) {
     const f = fmtOf(ctx);
     const lt = activeLt(ctx && ctx.state); // P3：读活动会话末轮
@@ -1022,35 +1347,31 @@ const speed = {
     const useSess = s && isNum(s.outTps30);
     const v = useSess ? s.outTps30
       : lt && isNum(lt.outTps) ? lt.outTps : null;
-    const exact = useSess ? s.outTps30Exact === true : lt && lt.outTpsExact === true;
-    return h('span', 'qum-mini', isNum(v) ? `⚡ ${exact ? '' : '~'}${f.fmtNum(v, 1)} t/s` : '⚡ -- t/s');
+    return h('span', 'qum-mini', isNum(v) ? `⚡ ${f.fmtNum(v, 1)} t/s` : '⚡ -- t/s');
   },
   render(ctx) {
     const f = fmtOf(ctx);
     const s = activeSess(ctx.state); // P3：吞吐/时长跟随活动会话
     const tk = activeMode(ctx.state);
     const box = h('div', 'qum-speed');
-    const sec = s && isNum(s.avgTurnSec) ? Math.round(s.avgTurnSec) : null;
+    const sec = s && isNum(s.avgTurnSec) ? s.avgTurnSec : null;
     if (ctx.size === 'full') {
-      // P2 时长集中（修订②）：最新一轮（lastTurn.turnSec round1 一位小数）→ 平均回合 → 总耗时 → 生成速度 →（credits）近30分钟；计费输入行删除
+      // P2 时长集中（修订②）：最新一轮（lastTurn.turnSec 一位小数）→ 平均回合 → 总耗时 → 生成速度 →（credits）近30分钟；计费输入行删除
       const lt = activeLt(ctx.state);
       const turnSec = lt && isNum(lt.turnSec) ? lt.turnSec : null;
       box.append(line('最新一轮', turnSec === null ? '--' : `${f.fmtNum(turnSec, 1)} s`));
-      box.append(line('平均回合', sec === null ? '--' : `${sec} s`));
+      box.append(line('平均回合', sec === null ? '--' : `${f.fmtNum(sec, 1)} s`));
       const total = s && isNum(s.totalTurnSec) ? s.totalTurnSec : null;
       box.append(line('总耗时', f.fmtDur(total)));
-      if (tk) {
-        const t = s && isNum(s.outTps30) ? s.outTps30 : null;
-        box.append(line('生成速度', tpsText(f, t, s && s.outTps30Exact === true) + ' · 近30分钟'));
-      } else {
-        const t = s ? s.outTps30 : null;
-        box.append(line('生成速度', tpsText(f, t, s && s.outTps30Exact === true) + ' · 近30分钟'));
+      const t = s && isNum(s.outTps30) ? s.outTps30 : null;
+      box.append(line('生成速度', tpsText(f, t) + ' · 近30分钟'));
+      if (!tk) {
         box.append(withCreditTip(
           line('近30分钟', `${creditText(f, s, 'rateCpm30')} cr/min`), s, 'rateCpm30', f));
       }
-      box.append(h('div', 'qum-note', '生成速度 = 最佳输出（真值优先，缺失才估算）÷ 实测纯模型秒（~ 为估算；无日志轮按轮时长扣工具时间）'));
+      box.append(h('div', 'qum-note', '生成速度 = 最佳输出（真值优先，缺失才估算）÷ 实测纯模型秒（无日志轮按轮时长扣工具时间）'));
     } else {
-      box.append(line('均', sec === null ? '--' : `${sec}s`));
+      box.append(line('均', sec === null ? '--' : `${f.fmtNum(sec, 1)}s`));
     }
     return box;
   },
@@ -1111,13 +1432,17 @@ const tools = {
 };
 
 // 资源包即真实模型的"额度"面：addOnQuota{used,total,remaining,percentage,unit:'credits'}。
+// 2026-10-30 用户反馈：套餐用户的资源包不止 addOnQuota——dedicatedResourcePackages（如
+// 「Qwen 专属积分」）也是可用额度，原生页把两者都计入。故 strip/pack 统一先走 quotaAgg
+// （addOn + dedicated 聚合，分母含专属积分），聚合不可得（旧账户形态/仅有 percentage）才
+// 回落此前的 addOn/pickPack 链——旧口径逐字节不变。
 // Strip layout v7（2026-10-26 用户裁定：对齐客户端原生底栏）：pack 经 slotIds:['quota'] 提供
-// 「◔ N%」剩余比例迷你槽（remaining/total → 1-used/total → 1-percentage/100；仅有 packRem 或
-// 无账户 → '◔ --'，绝不猜）。面板 render 不变。
+// 「◔ N%」剩余比例迷你槽（quotaAgg 剩余率，回落 remaining/total → 1-used/total →
+// 1-percentage/100；仅有 packRem 或无账户 → '◔ --'，绝不猜）。
 // full：.qum-bar fill = used/total（CSS 类合法复用；资源包无重置字段 → 无 pace tick、
 // 无倒计时、无徽标——保持事实）+ 一行「已用 750 / 1200 · 剩余 450 cr」（fmtCredits
-// 无 k 缩写，与客户端用量页对账）。used/total 不可得 → 降级为仅剩余行、不出 bar。
-// half：「剩余 N」（pickPack 候选链原样，含 packRem 优先）。
+// 无 k 缩写，与客户端用量页对账）+（多份时）每份拆分行。used/total 不可得 → 降级为仅剩余行。
+// half：「剩余 N」（quotaAgg 剩余，回落 pickPack 候选链原样，含 packRem 优先）。
 const pack = {
   id: 'pack',
   title: '资源包',
@@ -1126,14 +1451,37 @@ const pack = {
   slotIds: ['quota'],
   renderMini(ctx) {
     const f = fmtOf(ctx);
-    const r = quotaRatio(ctx && ctx.state && ctx.state.account);
+    const acct = ctx && ctx.state && ctx.state.account;
+    const agg = quotaAgg(acct);
+    const r = agg ? agg.ratio : quotaRatio(acct);
     return h('span', 'qum-mini', `◔ ${r === null ? '--' : f.fmtPct(r)}`);
   },
   render(ctx) {
     const f = fmtOf(ctx);
     const acct = ctx.state && ctx.state.account;
+    const agg = quotaAgg(acct);
     const rem = pickPack(acct); // T10 前 account 通常为 null → '--'
     const box = h('div', 'qum-pack');
+    if (agg) {
+      if (ctx.size === 'full') {
+        const bar = h('div', 'qum-bar');
+        const fill = h('div', 'qum-bar-fill');
+        fill.style.width = pctStyle(agg.used / agg.total);
+        bar.append(fill);
+        box.append(bar);
+        box.append(line('已用',
+          `${f.fmtCredits(agg.used)} / ${f.fmtCredits(agg.total)} · 剩余 ${f.fmtCredits(agg.remaining)} cr`));
+        // 拆分只在多于一份时出现（单份 = 合计行同值，重复无意义）
+        if (agg.parts.length > 1) {
+          for (const p of agg.parts) {
+            box.append(line(p.name, `${f.fmtCredits(p.used)} / ${f.fmtCredits(p.total)} · 剩余 ${f.fmtCredits(p.remaining)} cr`));
+          }
+        }
+        return box;
+      }
+      box.append(line('剩余', f.fmtK(agg.remaining)));
+      return box;
+    }
     const ad = addOnBlock(acct);
     const used = ad && isNum(ad.used) ? ad.used : null;
     const total = ad && isNum(ad.total) ? ad.total : null;
@@ -1162,15 +1510,20 @@ const mascot = {
   render(ctx) {
     const st = ctx.state;
     // P1.5 rekey（阈值改读真资源包，假 quota 仪表已删）：无账户数据 → 🫥；
-    // addOnQuota used/total 优先、percentage（0–100）兜底算剩余；有账户但读不出 → 🙂 中性。
+    // 剩余率 = quotaAgg（addOn + dedicated 聚合，2026-10-30 与 strip 同源）；
+    // 聚合不可得 → addOnQuota used/total 优先、percentage（0–100）兜底；有账户但读不出 → 🙂 中性。
     const acct = st && st.account;
     const hasAcctData = !!(acct && acct.raw && typeof acct.raw === 'object');
     let remain = null;
     if (hasAcctData) {
-      const ad = addOnBlock(acct);
-      if (ad) {
-        if (isNum(ad.used) && isNum(ad.total) && ad.total > 0) remain = clamp01(1 - ad.used / ad.total);
-        else if (isNum(ad.percentage)) remain = clamp01(1 - ad.percentage / 100);
+      const agg = quotaAgg(acct);
+      if (agg) remain = agg.ratio;
+      else {
+        const ad = addOnBlock(acct);
+        if (ad) {
+          if (isNum(ad.used) && isNum(ad.total) && ad.total > 0) remain = clamp01(1 - ad.used / ad.total);
+          else if (isNum(ad.percentage)) remain = clamp01(1 - ad.percentage / 100);
+        }
       }
     }
     const face = !hasAcctData ? '🫥'
@@ -1284,6 +1637,6 @@ const heatmap = {
 
 // ---------------------------------------------------------------- 注册（import 即接线，一次）
 setFmt(fmt);
-for (const def of [usage, session, sessions, models, consumption, cache, speed, tools, pack, mascot, heatmap, metrics]) {
+for (const def of [pulse, turnspeed, session, sessions, models, consumption, cache, speed, tools, pack, mascot, heatmap, metrics]) {
   registerModule(def);
 }

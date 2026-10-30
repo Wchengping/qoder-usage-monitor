@@ -28,7 +28,7 @@ export const LAYOUT_STORAGE_KEY = 'qum.layout.v1';
 export const COLLAPSED_STORAGE_KEY = 'qum.collapsed.v1';
 // P2 一级折叠：只存“折叠(true)”的模块 id，展开即删键；缺省/脏值 → 全展开（fail-open）。
 // Strip layout v7（2026-10-26 用户裁定：对齐客户端原生底栏，接替 v6）：单行六槽 =
-// 会话生成速度 tps（⚡ [~]N.N t/s；估算才带 ~）+ 资源包剩余 quota（◔ N%）+ 会话簇 session（[≈]N万 tok ·
+// 会话生成速度 tps（⚡ N.N t/s）+ 资源包剩余 quota（◔ N%）+ 会话簇 session（N万 tok ·
 // 命中% · 轮 · 请求）+ 工具/失败 tools + 会话累计 credits + 末轮耗时 turnsec。悬停出摘要卡
 // （精确千分位），点击仍打开完整面板。v7 哨兵：每槽可迷你 且 含 session/tools/credits 且
 // 不含 model——v4/v5（含 model）/v6（缺 session/tools）存档 → 整条回落 v7 默认。
@@ -62,6 +62,16 @@ export const SESSION_ID_ATTRS = new Set([
   'data-chat-session-id',
   'data-session-id',
 ]);
+// 2026-10-28 用户反馈 §2（新会话全 '--'）：白名单里「值 = sessionId」的**结构性容器**属性与
+// 侧栏行属性不同——它们直接包着聊天视图，即使 daemon 还没扫描到/发布该会话（新建会话第一轮），
+// 也必须采信。此前要求值 ∈ knownSessionIds，导致新会话在首轮落盘+发布前整条 strip 全是 '--'
+// （账户级 quota 正常），被误读为「自定义模型没数据」。daemon 对未知 sid 回 {lastTurn:null,
+// session:null}，呈现层出「暂无回合数据」，绝不串到别的会话。
+// data-session-id 是侧栏行属性（近似信号），仍只认已知会话 id。
+export const STRUCTURAL_SESSION_ATTRS = new Set([
+  'data-chat-session-standalone-conversation',
+  'data-chat-session-id',
+]);
 
 /** 元素上值确为会话 id 的具名属性（白名单；诊断仍用 sessionAttrs 全量收集）。 */
 function sessionIdAttrs(el) {
@@ -87,8 +97,9 @@ function sessionAttrs(el) {
 
 /**
  * P3（spec §5.1）：解析「用户当前在看哪个会话」。返回 {sessionId, pane, method, diag}。
- * knownIds = daemon 已知的会话 id 集合（state.local.sessions[].id）——用来确认"这个值确实是
- * 会话 id"，避免把 pane id / 随机数误当会话。
+ * knownIds = daemon 已知的会话 id 集合（state.local.sessions[].id）——用于确认**近似信号**
+ * （侧栏行）确实是会话；结构性容器属性（单会话根/pane，值本身就是 sessionId）不依赖它，
+ * 否则新建会话在 daemon 发布前无法跟随（2026-10-28 用户反馈 §2）。
  * 级别（2026-10-28 上游反馈修订：显式身份优先，近似信号最后）：
  *   ① 'active' 带 data-active 的 pane；② 'anchor' 具名 pane 选择器命中锚点所在 pane；
  *   ③ 'visible' 全页恰好一个可见 pane；④ 'focus' 多 pane 可见时取 activeElement 所在；
@@ -97,6 +108,8 @@ function sessionAttrs(el) {
  */
 export function resolveActivePane(doc, anchorEl, knownIds) {
   const known = knownIds instanceof Set ? knownIds : new Set(Array.isArray(knownIds) ? knownIds : []);
+  // 身份属性可信？结构性容器属性（值即 sessionId）无条件可信；其余白名单属性（侧栏行）须命中已知集合。
+  const trusted = (name, value) => STRUCTURAL_SESSION_ATTRS.has(name) || known.has(value);
   const sidOf = (el) => {
     const v = el && el.dataset ? el.dataset.chatSessionId : undefined;
     return typeof v === 'string' && v ? v : null;
@@ -121,8 +134,10 @@ export function resolveActivePane(doc, anchorEl, knownIds) {
     if (anchorEl && typeof anchorEl.closest === 'function') {
       for (const sel of PANE_SELECTORS) {
         const own = anchorEl.closest(sel);
-        const sid = sidOf(own) || (own && sessionIdAttrs(own).map(([, v]) => v).find((v) => known.has(v))) || null;
-        if (sid && (known.size === 0 || known.has(sid))) return hit(sid, own, 'anchor', diag);
+        const sid = sidOf(own)
+          || (own && sessionIdAttrs(own).map(([name, v]) => (trusted(name, v) ? v : null)).find(Boolean))
+          || null;
+        if (sid) return hit(sid, own, 'anchor', diag);
       }
     }
     const isVisible = (el) => {
@@ -148,10 +163,11 @@ export function resolveActivePane(doc, anchorEl, knownIds) {
     // 祖先链（真机单窗口主路径：panes=0，只剩包住聊天视图的单会话根属性）。这是**结构性**证据
     // （直接包着锚点的容器），比侧栏选中行更贴近「正在看哪个会话」，故先用它。
     // 只认值确实是会话 id 的具名容器属性；名字含 session 的路由/上次会话指针绝不采纳。
+    // 结构性容器属性不要求值 ∈ known（新建会话在 daemon 发布前也要能跟随）。
     for (let el = anchorEl; el && el !== el.parentNode; el = el.parentNode) {
       for (const [name, value] of sessionIdAttrs(el)) {
         if (!diag.attrs.includes(name)) diag.attrs.push(name);
-        if (known.has(value)) return hit(value, el, 'attr', diag);
+        if (trusted(name, value)) return hit(value, el, 'attr', diag);
       }
       if (!el.parentElement && typeof el.closest !== 'function') break; // 无 parentElement 的假 DOM：只走一层
       if (!el.parentElement) break;
@@ -284,7 +300,8 @@ function ensureModules() {
   import('./modules.js' + DEV_Q).catch(() => { /* 模块缺失：占位 '--'，绝不崩宿主 */ });
 }
 
-/** 已知会话 id 集合（daemon 已发布的会话）——不认属性名的判定靠它确认"这值确实是会话 id"。 */
+/** 已知会话 id 集合（daemon 已发布的会话）——只给**近似信号**（侧栏行、路由指针）做归属确认；
+ * 结构性容器属性（白名单里值 = sessionId 的单会话根/pane）不依赖它，见 STRUCTURAL_SESSION_ATTRS。 */
 function knownSessionIds() {
   const local = state && state.local;
   const out = new Set();
@@ -894,8 +911,6 @@ function renderHover() {
   const s = activeSessionOf();
   const local = state && state.local ? state.local : null;
   const tk = !!(local && local.billingMode === 'tokens');
-  const cw = local && local.contextWindow;
-  const approx = !tk && (!cw || cw.source !== 'runtime-config');
   const n = (v) => (isFiniteNum(v) ? fmtNum(v, 0) : '--');
   const head = doc.createElement('div');
   head.className = 'qum-hover-title';
@@ -903,16 +918,15 @@ function renderHover() {
   const unresolved = !s && state && state.meta && state.meta.activeTracked === true;
   head.textContent = unresolved ? '会话累计 · 未识别当前会话' : '会话累计 · 全部请求';
   const rows = [];
-  // 输入：credits 口径 = 计费输入估算（≈ 仅 contextWindow 非 runtime-config）；tokens 口径 = 真实总量。
+  // 输入：credits 口径 = 计费输入估算；tokens 口径 = 真实总量。
   const inp = s ? (tk ? realPromptOf(s) : s.billedInput) : null;
-  let inVal = `${approx && isFiniteNum(inp) ? '≈' : ''}${n(inp)} tok`;
+  let inVal = `${n(inp)} tok`;
   if (s && isFiniteNum(s.cacheHitRate)) inVal += ` · 命中 ${fmtPct(s.cacheHitRate)}`;
   rows.push(hoverRow(doc, '输入', inVal));
-  // 输出：最佳值（usage 真值优先，缺失才用三段估算）——全真值不带 ~，估算/混合带 ~；
-  // 思考 tokens 仅在估算参与时出段（不补 0）。
+  // 输出：最佳值（usage 真值优先，缺失才用三段估算）；思考 tokens 仅在估算参与时出段（不补 0）。
   const outBest = s && isFiniteNum(s.outTok) ? s.outTok : s && isFiniteNum(s.outEst) ? s.outEst : null;
   const outExact = !!(s && isFiniteNum(s.outTok) && s.outExact === true);
-  let outVal = outBest !== null ? `${outExact ? '' : '~'}${n(outBest)} tok` : '--';
+  let outVal = outBest !== null ? `${n(outBest)} tok` : '--';
   if (!outExact && s && isFiniteNum(s.outEstThk) && s.outEstThk > 0) outVal += ` · 思考 ${n(s.outEstThk)}`;
   rows.push(hoverRow(doc, '输出', outVal));
   // 用量：credits 与 tokens 并列展示，两口径绝不折算（tokens 口径无 credits → 只出 tokens）。

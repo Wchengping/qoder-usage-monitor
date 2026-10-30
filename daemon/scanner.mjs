@@ -1039,3 +1039,168 @@ export function sessionsSummary(records, now, ctxMeta) { // eslint-disable-line 
   rows.sort((a, b) => b.lastTs - a.lastTs);
   return rows.slice(0, 10);
 }
+
+// ---------------------------------------------------------------- 2026-10-30：面板用量波形（pulseOf）
+// 用户裁定（批准静态预览 2026-10-29）：展开面板顶部出三档波形卡——
+//   h1  = now−1h → now，固定 60×1min；h24 = now−24h → now，固定 48×30min；
+//   all = 本会话首条 usage → 末条 usage，步长沿 PULSE_LADDER 取「桶数 ≤ 60 的最小档」
+//         （批准预览实测 462h 会话 → 12h × 39 格；72h → 2h × 36 格；单条记录 → 1 格 1min）。
+// 桶值口径：vals = 名义 credits（含 billable:false 的免扣量；credits null → 0 贡献）；
+// billTotal/freeTotal 只统计 billable === true/false（未知不计入任一，窗口无记录 → null）；
+// outs = 桶内最佳 Output（真值优先、缺失 outEst，tokens 口径呈现用）；outTotal = 窗口 Σ 最佳
+// Output（记录级求和，不是桶最大值之和）。未来 ts（客户端钟偏）与他会话剔除；绝不猜空会话。
+const PULSE_LADDER = [
+  60_000, 5 * 60_000, 15 * 60_000, 30 * 60_000,
+  3_600_000, 2 * 3_600_000, 6 * 3_600_000, 12 * 3_600_000,
+  86_400_000, 2 * 86_400_000, 7 * 86_400_000,
+];
+
+/**
+ * 单窗口分桶（纯函数）：入参 recs 已限定会话/时间窗；from + step×n 定义桶网格，to 仅回填。
+ * 见 PULSE_LADDER 注：全部字段语义固定，呈现层只读不重算。
+ */
+function pulseWindowOf(recs, from, step, n, to) {
+  const vals = new Array(n).fill(0);
+  const outs = new Array(n).fill(0);
+  const counts = new Array(n).fill(0);
+  let total = 0;
+  let bill = 0;
+  let free = 0;
+  let outTotal = 0;
+  for (const r of recs) {
+    let i = Math.floor((r.ts - from) / step);
+    if (i < 0) i = 0;
+    else if (i >= n) i = n - 1;
+    counts[i] += 1;
+    if (typeof r.credits === 'number' && Number.isFinite(r.credits)) {
+      vals[i] += r.credits;
+      total += r.credits;
+      if (r.billable === true) bill += r.credits;
+      else if (r.billable === false) free += r.credits;
+    }
+    const o = bestOutOf(r);
+    if (o > outs[i]) outs[i] = o;
+    outTotal += o;
+  }
+  let peak = 0;
+  let peakIdx = -1;
+  let peakOut = 0;
+  for (let i = 0; i < n; i++) {
+    if (vals[i] > peak) { peak = vals[i]; peakIdx = i; }
+    if (outs[i] > peakOut) peakOut = outs[i];
+  }
+  return {
+    step, n, from, to,
+    vals: vals.map(round2),
+    outs,
+    counts,
+    total: round2(total),
+    billTotal: recs.length ? round2(bill) : null, // 有记录但全未知 → 0；无记录 → null（呈现 '--'）
+    freeTotal: recs.length ? round2(free) : null,
+    peak: round2(peak),
+    peakAt: peak > 0 ? from + peakIdx * step : null, // 峰值 0 → 无峰值时刻（不指向起点误导）
+    peakOut,
+    outTotal: round2(outTotal),
+    rows: recs.length,
+  };
+}
+
+/**
+ * 会话三档波形（请求态数据面，纯函数、绝不抛）：见 PULSE_LADDER 注。
+ * sid 无效 / 记录非数组 / 该会话无 usage → null（呈现层出空态说明，绝不回落他会话）。
+ */
+export function pulseOf(records, sessionId, now = Date.now()) {
+  if (typeof sessionId !== 'string' || !sessionId || !Array.isArray(records)) return null;
+  const tNow = Number.isFinite(now) ? now : Date.now();
+  const mine = dedupe(records.filter((r) => r && typeof r === 'object' && r.kind !== 'prompt'
+    && r.sessionId === sessionId && Number.isFinite(r.ts) && r.ts <= tNow))
+    .sort((a, b) => a.ts - b.ts);
+  if (!mine.length) return null;
+  const h1 = pulseWindowOf(mine.filter((r) => r.ts >= tNow - 3_600_000), tNow - 3_600_000, 60_000, 60, tNow);
+  const h24 = pulseWindowOf(mine.filter((r) => r.ts >= tNow - 86_400_000), tNow - 86_400_000, 1_800_000, 48, tNow);
+  const from = mine[0].ts;
+  const to = mine[mine.length - 1].ts;
+  const span = to - from;
+  let step = 60_000;
+  if (span > 0) {
+    step = PULSE_LADDER[PULSE_LADDER.length - 1];
+    for (const s of PULSE_LADDER) {
+      if (Math.ceil(span / s) <= 60) { step = s; break; }
+    }
+  }
+  const n = span === 0 ? 1 : Math.ceil(span / step);
+  return { sessionId, h1, h24, all: pulseWindowOf(mine, from, step, n, to) };
+}
+
+// ---------------------------------------------------------------- 2026-10-30：逐轮生成速度（turnSpeedsOf）
+// 用户裁定（批准预览）：每个模型一行，逐轮 tps 柱 + 平均 tps。轮 = buildTurns 的 prompt 轮；
+// 轮×模型组内**仅已配对记录**参与（分子 = Σ最佳 Output（真值优先/缺失估算），分母 = 配对区间
+// 合并并夹到轮墙钟 [promptTs, endTs]；并发不重复计时）——与 lastTurnOfSession/byModelOf 同规。
+// 输出：
+//   {sessionId, totalTurns, timedTurns, rows:[{model, modelName:null, turns, timed, mean, agg,
+//    min, max, series:[{ts: promptTs, tps}]}]}
+// turns = 该模型参与轮数（含无实测轮）；timed = 可测轮数（该组 tps 非 null）；
+// mean = 可测轮 tps 的**算术平均**（round1，与 approved 预览一致）；agg = ΣOutput ÷ Σ实测秒
+// （加权参考，round1）；min/max = 可测轮极值；series 按轮时间升序。行按 mean 降序（null 垫底）。
+// 无 prompt（buildTurns 无轮）/无该会话记录 / 坏入参 → null。
+export function turnSpeedsOf(records, sessionId) {
+  if (typeof sessionId !== 'string' || !sessionId || !Array.isArray(records)) return null;
+  const mine = dedupe(records.filter((r) => r && typeof r === 'object' && r.sessionId === sessionId));
+  if (!mine.length) return null;
+  const turns = buildTurns(mine);
+  if (!turns.length) return null;
+  const groups = new Map();
+  let timedTurns = 0;
+  for (const t of turns) {
+    const by = new Map();
+    for (const r of t.records) {
+      const key = typeof r.model === 'string' && r.model ? r.model : null;
+      if (!by.has(key)) by.set(key, []);
+      by.get(key).push(r);
+    }
+    let turnTimed = false;
+    for (const [key, grp] of by) {
+      let g = groups.get(key);
+      if (!g) {
+        g = { model: key, turns: 0, timed: 0, sumTps: 0, out: 0, ms: 0, min: null, max: null, series: [] };
+        groups.set(key, g);
+      }
+      g.turns += 1;
+      const paired = grp.filter(isPaired);
+      if (!paired.length) continue;
+      const out = outSum(paired);
+      const ms = mergeIntervalMs(intervalsOf(paired), t.promptTs, t.endTs);
+      const tps = rateTps(out, ms);
+      if (tps === null) continue; // 分子或分母为 0 → 该轮不可测（不除 0、不出 0）
+      g.timed += 1;
+      turnTimed = true;
+      g.sumTps += tps;
+      g.out += out;
+      g.ms += ms;
+      g.min = g.min === null ? tps : Math.min(g.min, tps);
+      g.max = g.max === null ? tps : Math.max(g.max, tps);
+      g.series.push({ ts: t.promptTs, tps });
+    }
+    if (turnTimed) timedTurns += 1;
+  }
+  const rows = [...groups.values()].map((g) => ({
+    model: g.model,
+    modelName: null, // 目录解析在 server/buildActive（与 session.byModel 同规）
+    turns: g.turns,
+    timed: g.timed,
+    mean: g.timed > 0 ? Math.round((g.sumTps / g.timed) * 10) / 10 : null,
+    agg: g.ms > 0 ? Math.round((g.out / g.ms) * 1000 * 10) / 10 : null,
+    min: g.min,
+    max: g.max,
+    series: g.series,
+  }));
+  rows.sort((a, b) => {
+    const am = a.mean === null ? -Infinity : a.mean;
+    const bm = b.mean === null ? -Infinity : b.mean;
+    if (am !== bm) return bm - am;
+    const ak = a.model === null ? '\uffff' : a.model;
+    const bk = b.model === null ? '\uffff' : b.model;
+    return ak < bk ? -1 : ak > bk ? 1 : 0;
+  });
+  return { sessionId, totalTurns: turns.length, timedTurns, rows };
+}

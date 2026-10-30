@@ -7,10 +7,10 @@
 ## 功能
 
 - **底栏**：吞吐、资源包剩余比例、会话累计、工具调用、credits、最近回合耗时，以及上次分析时刻。
-- **面板**：用量节奏、token 消耗、缓存命中、吞吐/时长、工具与失败、会话明细、模型分布、资源包、用量热力、累计指标。
+- **面板**：用量波形、逐轮生成速度、token 消耗、缓存命中、吞吐/时长、工具与失败、会话明细、模型分布、资源包、用量热力、累计指标。
 - **两种计费口径**：内置模型按 credits，BYOK（`qoder-custom-*`）按 token；主数字优先显示实际扣减的 credits，名义值和未扣减量只放进 tooltip。
-- **账户数据**：通过 Qoder 渲染进程已鉴权的 `window.qoderDesktop` IPC 读取，并解析 `userQuota` / `addOnQuota` / 热力 / 累计指标。
-- **本地统计**：递归扫描 Qoder 会话与子代理 JSONL，按 5 小时滚动窗口、本地自然日/周聚合；uuid 去重，跳过 `<synthetic>` 记录。输出 token 有真实 `usage.output_tokens` 时用真值，缺失才按正文估算，界面以 `~` 标注估算值。
+- **账户数据**：通过 Qoder 渲染进程已鉴权的 `window.qoderDesktop` IPC 读取，并解析 `userQuota` / `addOnQuota` / `dedicatedResourcePackages` / 热力 / 累计指标。
+- **本地统计**：递归扫描 Qoder 会话与子代理 JSONL，按 5 小时滚动窗口、本地自然日/周聚合；uuid 去重，跳过 `<synthetic>` 记录。输出 token 有真实 `usage.output_tokens` 时用真值，缺失才按正文估算；小数类数值统一保留一位小数（计数仍为整数），估算值不加近似符号。
 
 ## 隐私与安全
 

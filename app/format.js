@@ -13,9 +13,9 @@
 //   fmtCountdown(ms) ms>0 → '2h31m' 形态（h≥1 时 `HhMm`，否则 `Mm`，均向下取整）；
 //                    ms≤0（含负值）→ '0m'（钳位）；非有限数 → '--'。
 //   fmtTps(v)        一位小数 + ' tps'（0 → '0.0 tps'，列宽稳定）；非有限数 → '--'。
-//   fmtCredits(v)    T12 credits 校准（本地口径主单位）：|v|<10 → 一位小数舍入后自然省略尾数
-//                    '.0'（0.8022897630 → '0.8'，6.54 → '6.5'，0 → '0'）；|v|≥10 → 四舍五入
-//                    整数（12.4 → '12'，无 k 单位——credits 不做千分位缩写）；
+//   fmtCredits(v)    T12 credits 校准（本地口径主单位）：统一一位小数舍入后自然省略尾数
+//                    '.0'（0.8022897630 → '0.8'，6.54 → '6.5'，12.4 → '12.4'，0 → '0'；
+//                    无 k 单位——credits 不做千分位缩写）；
 //                    null/undefined/NaN/±Infinity → '--'（旧 state 无 credits 字段的诚实降级）。
 //   barPcts(u,t)     合法时 {ratio,remain}：used 钳到 [0,total]，各值四舍五入 4 位小数，
 //                    ratio+remain 由各自独立舍入（和可能差 0.0001，仅展示用）。
@@ -24,12 +24,15 @@
 //                    非有限数/≤0 → '--/-- --:--:--'（底栏「分析」列：上次分析时刻）。
 //   fmtStamp(ts)     绝对时刻（ms）→ 'YYYY-MM-DD HH:MM:SS'（本地；tooltip 完整时刻）；
 //                    非有限数/≤0 → '--'。
-//   fmtCompact(n)    v7 底栏会话簇的中文紧凑单位：|n|≥1e8 → 'x.xx亿'、|n|≥1e4 → 'x.xx万'
-//                    （两位小数裁尾零）；<1e4 → fmtNum 千分位整数；非有限数 → '--'。
+//   fmtCompact(n)    v7 底栏会话簇的中文紧凑单位：|n|≥1e8 → 'x.x亿'、|n|≥1e4 → 'x.x万'
+//                    （一位小数裁尾零）；<1e4 → fmtNum 千分位整数；非有限数 → '--'。
 
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 
 const round4 = (x) => Math.round(x * 1e4) / 1e4;
+
+/** 一位小数裁尾零（'12.0' → '12'，'12.8' → '12.8'）。 */
+const trim1 = (s) => s.replace(/\.0$/, '');
 
 /** token 数千分位简写：482130 → '482.1k'；999 → '999'；null → '--'。 */
 export function fmtK(n) {
@@ -41,7 +44,7 @@ export function fmtK(n) {
 /**
  * 计费输入 tokens（ratio×contextWindow 派生值）呈现：fmtK 风格加 M 档——
  * 1234567 → '1.2M'；45600 → '45.6k'；820 → '820'；null/非有限 → '--'。
- * ≈ 前缀（200k 兜底口径标记）属呈现层职责，由调用方按 billedInputSource 添加。
+ * 估算来源（200k 兜底）只留在数据面，呈现层不再附加标记。
  */
 export function fmtTokens(n) {
   if (!isNum(n)) return '--';
@@ -72,11 +75,10 @@ export function fmtTps(v) {
   return v.toFixed(1) + ' tps';
 }
 
-/** credits → 主呈现格式：<10 一位小数（尾 .0 省略，0 → '0'）；≥10 四舍五入整数；null → '--'。 */
+/** credits → 主呈现格式：一位小数（尾 .0 省略，0 → '0'）；null → '--'。 */
 export function fmtCredits(v) {
   if (!isNum(v)) return '--';
-  if (Math.abs(v) >= 10) return String(Math.round(v));
-  return String(Math.round(v * 10) / 10);
+  return trim1((Math.round(v * 10) / 10).toFixed(1));
 }
 
 /** 用量/总量 → {ratio, remain}（均钳 [0,1]、4 位小数）；容错：任一入参缺失/非法 → null 对。 */
@@ -131,18 +133,16 @@ export function fmtStamp(ts) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
-/** 两位小数裁尾零（'12.00' → '12'，'12.80' → '12.8'）。 */
-const trim2 = (s) => s.replace(/\.?0+$/, '');
 
 /**
  * v7 底栏会话簇的中文紧凑单位（2026-10-26 用户裁定，对齐客户端原生底栏）：
- * 1234567 → '123.46万'；128000 → '12.8万'；100000000 → '1亿'；9999 → '9,999'；null → '--'。
- * 只做展示缩写，值本身不失真（悬停卡给精确千分位）。
+ * 1234567 → '123.5万'；128000 → '12.8万'；100000000 → '1亿'；9999 → '9,999'；null → '--'。
+ * 一位小数；只做展示缩写，值本身不失真（悬停卡给精确千分位）。
  */
 export function fmtCompact(n) {
   if (!isNum(n)) return '--';
   const abs = Math.abs(n);
-  if (abs >= 1e8) return trim2((n / 1e8).toFixed(2)) + '亿';
-  if (abs >= 1e4) return trim2((n / 1e4).toFixed(2)) + '万';
+  if (abs >= 1e8) return trim1((Math.round((n / 1e8) * 10) / 10).toFixed(1)) + '亿';
+  if (abs >= 1e4) return trim1((Math.round((n / 1e4) * 10) / 10).toFixed(1)) + '万';
   return fmtNum(n, 0);
 }

@@ -1,7 +1,7 @@
 // tests/scanner.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseJsonlLine, parseRuntimeConfig, aggregate, dailyRows, sessionStats, sessionStatsFor, sessionsSummary, buildTurns, lastTurnOf, lastTurnOfSession, byModelOf, byModelWindowOf, toolStatsOf } from '../daemon/scanner.mjs';
+import { parseJsonlLine, parseRuntimeConfig, aggregate, dailyRows, sessionStats, sessionStatsFor, sessionsSummary, buildTurns, lastTurnOf, lastTurnOfSession, byModelOf, byModelWindowOf, toolStatsOf, pulseOf, turnSpeedsOf } from '../daemon/scanner.mjs';
 
 const H = 3600_000;
 const line = (ts, u, sub = false, uuid = 'x' + ts) => JSON.stringify({
@@ -329,7 +329,7 @@ test('sessionStats: 空输入 → {id:null, credits:null, turns:0, rateCpm30:nul
 //  - assistant 记录 message.usage.context_usage_ratio 是平台真值（如 0.138735）；
 //  - 计费输入 tokens = ratio × contextWindow（inspector "计费输入总量" 公式）；
 //  - contextWindow 来源：runtime-config 记录顶层字段（本机 qfmodel 实测可为 null → 兜底
-//    200000 并以 ≈ 标注，inspector 约定）；output/cache tokens 本地无真值（全 0）→
+//    200000，界面不因兜底加标记）；output/cache tokens 本地无真值（全 0）→
 //    tps 无法诚实呈现，换用会话内相邻回合间隔均值（>30min 剔为 idle）。
 
 test('parseJsonlLine: ratio 提取 usage.context_usage_ratio——0<r≤1 保留，缺失/0/>1/非数字 → null', () => {
@@ -352,7 +352,7 @@ test('parseRuntimeConfig: 顶层 contextWindow/model/sessionId/ts；window null 
   });
   assert.deepEqual(parseRuntimeConfig(mk()),
     { contextWindow: 180000, model: 'qfmodel', sessionId: 'S1', ts: now });
-  // 本机实况：qfmodel 会话 contextWindow 写 null——记录仍有效（消费侧走 200k 兜底 + ≈）
+  // 本机实况：qfmodel 会话 contextWindow 写 null——记录仍有效（消费侧走 200k 兜底，展示不加标记）
   assert.equal(parseRuntimeConfig(mk({ contextWindow: null })).contextWindow, null);
   assert.equal(parseRuntimeConfig(mk({ contextWindow: '180000' })).contextWindow, null); // 非数字
   assert.equal(parseRuntimeConfig(mk({ contextWindow: -5 })).contextWindow, null); // 负数
@@ -377,7 +377,7 @@ test('aggregate(ctxWindows): billedInput = Σ ratio×window（每记录 sessionI
   const a = aggregate(recs, now, new Map([['S1', 180000]]));
   assert.equal(a.window5h.billedInput, 0.5 * 180000 + 0.25 * 200000); // 90000+50000=140000
   assert.equal(a.window5h.billedInputSource, 'mixed');
-  // 全部 runtime 命中 → 无 ≈ 语义（source runtime-config）
+  // 全部 runtime 命中（source runtime-config）；展示不为来源加标记
   const b = aggregate(recs, now, new Map([['S1', 180000], ['S2', 100000]]));
   assert.equal(b.window5h.billedInput, 90000 + 25000);
   assert.equal(b.window5h.billedInputSource, 'runtime-config');
@@ -1050,4 +1050,108 @@ test('原生样式数据面 sessionStatsFor: rounds/requests/cacheHitRate/时间
   const g = sessionStats(records, T(100), new Map(), events);
   assert.equal(g.id, 'S-a');
   assert.equal(g.tools.calls, 3);
+});
+// ---------------------------------------------------------------- 2026-10-30：面板波形 / 逐轮生成速度（用户裁定）
+// 波形口径（批准预览 2026-10-29）：h1 = 60×1min、h24 = 48×30min 固定；all = 阶梯步长自适应，
+// 目标 ≤60 格（批准预览实测 462h 会话 → 12h × 39 格）。桶值 = 名义 credits（含免扣）；
+// billTotal/freeTotal 按 billable 三态（未知不计入任一）；outs = 最佳 Output（真值优先，缺失估算）。
+const P0 = new Date(2026, 9, 30, 12, 0, 0).getTime();
+const pRec = (min, o = {}) => ({
+  kind: 'usage', sessionId: 'S-p', uuid: o.uuid || `p${min}:${o.credits ?? 'x'}:${o.model || ''}`,
+  ts: P0 + Math.round(min * 60_000), input: 0, output: 0, cacheRead: 0, cacheCreate: 0,
+  credits: null, billable: null, model: 'm', outEst: 0, ...o,
+});
+
+test('pulseOf：h1/h24/all 分桶（1min/30min/阶梯自适应）、名义/实扣/免扣、峰值/峰值时刻/峰值输出、未来与他会话剔除', () => {
+  const recs = [
+    { kind: 'prompt', ts: P0 - 720 * 60_000, uuid: 'pp', sessionId: 'S-p' },
+    pRec(-4320, { credits: 5, billable: true, output: 400 }),  // 3 天前：只入全程
+    pRec(-1440, { credits: 10, billable: false, output: 500 }), // 恰在 h24 起点 → idx 0
+    pRec(-570, { credits: 2, billable: true, output: 100 }),    // 9.5h 前
+    pRec(-120, { credits: 4, billable: null, output: 300 }),    // billable 未知 → 只计名义
+    pRec(-60, { credits: 11, billable: false, output: 700 }),   // 恰在 h1 起点 → idx 0
+    pRec(-0.5, { credits: 3, billable: false, output: 200 }),
+    pRec(5, { credits: 7, billable: true, output: 900 }),       // 未来（钟偏）→ 三窗口都剔除
+    pRec(-1, { credits: 99, sessionId: 'S-other' }),            // 别的会话不串味
+  ];
+  const d = pulseOf(recs, 'S-p', P0);
+  assert.equal(d.sessionId, 'S-p');
+  // h1：now−1h → now，60×1min
+  assert.deepEqual([d.h1.step, d.h1.n, d.h1.from, d.h1.to], [60_000, 60, P0 - 3_600_000, P0]);
+  assert.deepEqual(d.h1.vals.map((v, i) => [i, v]).filter(([, v]) => v > 0), [[0, 11], [59, 3]]);
+  assert.deepEqual([d.h1.total, d.h1.billTotal, d.h1.freeTotal, d.h1.outTotal, d.h1.rows], [14, 0, 14, 900, 2]);
+  assert.deepEqual([d.h1.peak, d.h1.peakAt, d.h1.peakOut], [11, P0 - 3_600_000, 700]);
+  assert.deepEqual([d.h1.counts[0], d.h1.counts[59]], [1, 1]);
+  // h24：now−24h → now，48×30min
+  assert.deepEqual([d.h24.step, d.h24.n, d.h24.from], [1_800_000, 48, P0 - 86_400_000]);
+  assert.deepEqual([d.h24.total, d.h24.billTotal, d.h24.freeTotal, d.h24.outTotal, d.h24.rows], [30, 2, 24, 1800, 5]);
+  assert.deepEqual([d.h24.vals[0], d.h24.vals[29], d.h24.vals[44], d.h24.vals[46], d.h24.vals[47]], [10, 2, 4, 11, 3]);
+  assert.deepEqual([d.h24.peak, d.h24.peakAt, d.h24.peakOut], [11, P0 - 86_400_000 + 46 * 1_800_000, 700]);
+  // all：本会话首/末 usage（未来记录剔除）；72h 跨度 → 2h × 36 格
+  assert.deepEqual([d.all.step, d.all.n, d.all.from, d.all.to], [7_200_000, 36, P0 - 4320 * 60_000, P0 - 30_000]);
+  assert.deepEqual([d.all.total, d.all.billTotal, d.all.freeTotal, d.all.outTotal, d.all.rows], [35, 7, 24, 2200, 6]);
+  assert.deepEqual([d.all.vals[0], d.all.vals[31], d.all.vals[35]], [5, 2, 18]);
+  assert.equal(d.all.counts[35], 3);
+  assert.deepEqual([d.all.peak, d.all.peakAt, d.all.peakOut], [18, P0 - 4320 * 60_000 + 35 * 7_200_000, 700]);
+  // 坏入参/无记录 → null（不猜空会话）
+  assert.equal(pulseOf(recs, '', P0), null);
+  assert.equal(pulseOf(recs, 'S-none', P0), null);
+  assert.equal(pulseOf(null, 'S-p', P0), null);
+});
+
+test('pulseOf tokens 口径：credits 全 null → vals 全 0、outs 取最佳 Output（outEst 兜底）；全程步长阶梯钉死 12h×39 格（批准预览）', () => {
+  const recs = [
+    pRec(-27720, { output: 0, outEst: 120, credits: null }), // −462h：起点
+    pRec(-0.5, { output: 300, credits: null }),
+  ];
+  const d = pulseOf(recs, 'S-p', P0);
+  assert.deepEqual([d.all.step, d.all.n], [43_200_000, 39]); // 461.99h → 12h × 39（≤60 格的最小阶梯）
+  assert.equal(d.all.vals.every((v) => v === 0), true);
+  assert.deepEqual([d.all.total, d.all.peak, d.all.peakAt], [0, 0, null]);
+  assert.deepEqual([d.all.outs[0], d.all.outs[38], d.all.outTotal], [120, 300, 420]);
+  assert.equal(d.all.peakOut, 300, '峰值输出 = max(outs)（tokens 口径呈现用）');
+  assert.deepEqual([d.h1.peak, d.h1.peakAt, d.h1.peakOut], [0, null, 300], 'h1 无 credits → 峰值 0/无峰值时刻；峰值输出照出');
+  // 单条记录：全程单格（step 1min），from = to = 记录 ts
+  const one = pulseOf([pRec(0, { credits: 2.5, billable: true, output: 10 })], 'S-p', P0);
+  assert.deepEqual([one.all.n, one.all.step, one.all.from, one.all.to], [1, 60_000, P0, P0]);
+  assert.deepEqual([one.all.vals[0], one.all.peak, one.all.peakAt, one.all.peakOut], [2.5, 2.5, P0, 10]);
+});
+
+test('turnSpeedsOf：轮×模型配对求 tps（仅实测秒；output 真值优先、缺失 outEst）、mean/agg/min/max/series、按平均降序；无配对 timed 0', () => {
+  const T = (min) => P0 + min * 60_000;
+  const rec = (min, o = {}) => ({
+    kind: 'usage', sessionId: 'S-t', uuid: `t${min}:${o.model || 'mA'}`,
+    ts: T(min), model: 'mA', input: 0, output: 0, cacheRead: 0, cacheCreate: 0,
+    credits: 1, billable: true, outEst: 0, ...o,
+  });
+  const recs = [
+    { kind: 'prompt', ts: T(0), uuid: 'pr1', sessionId: 'S-t' },
+    { kind: 'prompt', ts: T(10), uuid: 'pr2', sessionId: 'S-t' },
+    { kind: 'prompt', ts: T(20), uuid: 'pr3', sessionId: 'S-t' },
+    // 轮1：A 100 tok / 1s = 100；另有未配对 A（分子分母都不参与）
+    rec(1, { model: 'mA', output: 100, mt0: T(1), mt1: T(1) + 1000 }),
+    rec(2, { model: 'mA', output: 50 }),
+    // 轮2：A 300 tok / 2s = 150；B output 0 + outEst 20 / 1s = 20
+    // （配对区间必须在轮墙钟内：B 的 1s 恰好结束于本条记录 ts，越过 endTs 的部分会被
+    //   与 lastTurnOf 同规的裁剪丢弃——真机 usage 行写于请求完成后，不会出现这种越界）
+    rec(11, { model: 'mA', output: 300, mt0: T(11), mt1: T(11) + 2000 }),
+    rec(12, { model: 'mB', output: 0, outEst: 20, mt0: T(12) - 1000, mt1: T(12) }),
+    // 轮3：C 仅未配对 → 无 tps
+    rec(21, { model: 'mC', output: 9 }),
+  ];
+  const d = turnSpeedsOf(recs, 'S-t');
+  assert.equal(d.sessionId, 'S-t');
+  assert.deepEqual([d.totalTurns, d.timedTurns], [3, 2]);
+  assert.deepEqual(d.rows.map((r) => r.model), ['mA', 'mB', 'mC'], '按平均 tps 降序（null 垫底）');
+  const [a, b, c] = d.rows;
+  assert.deepEqual([a.turns, a.timed, a.mean, a.agg, a.min, a.max], [2, 2, 125, 133.3, 100, 150]);
+  assert.deepEqual(a.series, [{ ts: T(0), tps: 100 }, { ts: T(10), tps: 150 }], 'series 时间序 = promptTs');
+  assert.equal(a.modelName, null, '解析名由 server/buildActive 贯通');
+  assert.deepEqual([b.turns, b.timed, b.mean, b.agg, b.min, b.max], [1, 1, 20, 20, 20, 20]);
+  assert.deepEqual(b.series, [{ ts: T(10), tps: 20 }]);
+  assert.deepEqual([c.turns, c.timed, c.mean, c.agg, c.min, c.max, c.series.length], [1, 0, null, null, null, null, 0]);
+  // 坏入参 / 无 prompt（buildTurns 无轮）/ 无 usage → null
+  assert.equal(turnSpeedsOf(recs, ''), null);
+  assert.equal(turnSpeedsOf([rec(1, {})], 'S-t'), null);
+  assert.equal(turnSpeedsOf(null, 'S-t'), null);
 });

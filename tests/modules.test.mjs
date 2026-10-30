@@ -2,8 +2,8 @@
 // Task 9 + P1.5 — app/modules.js 模块集冒烟（零新依赖，沿用 T8 假 DOM 模式）。
 // P1.5 用户裁定（真实模型）：Qoder 无 5h/周额度上限（那是参考项目 Claude 式假模型），
 // quota-5h/quota-week 两条假额度条删除；资源包升级为真仪表（pack：used/total fill +
-// 已用/剩余 事实行，无 pace tick 无倒计时）；用量信息保留并诚实改名（usage：用量节奏，
-// 纯本地窗口 credits 行，无 fill/百分比/徽标）。coverage：注册表元数据（9 模块 +
+// 已用/剩余 事实行，无 pace tick 无倒计时）；usage（用量节奏）在 v8 因与 consumption
+// 重复已删除。coverage：注册表元数据（13 模块 +
 // session.slotIds 双迷你槽）、pickPack 候选键链全防御、各模块 render（含 legacy 槽位
 // 迁移容忍：旧 miniSlots 未注册 → 整体回落新默认）、widget ctx.fmt 注入 + strip/panel 集成。
 // 控制器裁定（binding）：不倒计时、不读 window.resetAt；pack 候选键缺失 → --；
@@ -32,10 +32,14 @@ const syncActive = (st) => {
   const c = JSON.parse(JSON.stringify(st));
   const lt = c.local.lastTurn;
   const se = c.local.session;
+  const prev = c.local.active && typeof c.local.active === 'object' ? c.local.active : {};
   c.local.active = {
     sessionId: (lt && lt.sessionId) || (se && se.id) || null,
     lastTurn: lt === undefined ? null : lt,
     session: se === undefined ? null : se,
+    // 2026-10-30：波形 / 逐轮速度同为请求态 active 字段（缺省 null，模拟升级前 daemon）
+    pulse: prev.pulse === undefined ? null : prev.pulse,
+    turnSpeeds: prev.turnSpeeds === undefined ? null : prev.turnSpeeds,
   };
   return c;
 };
@@ -79,11 +83,16 @@ function makeEl(tag) {
     removeAttribute(k) { delete el.attrs[k]; },
     _listeners: {},
     addEventListener(type, fn) { (el._listeners[type] = el._listeners[type] || []).push(fn); },
-    fire(type) { (el._listeners[type] || []).forEach((fn) => fn({})); },
+    // v8.1：keydown 需要读 event.key → fire 允许携带事件载荷（缺省空对象，旧用例不变）
+    fire(type, ev) { (el._listeners[type] || []).forEach((fn) => fn(ev || {})); },
   };
   return el;
 }
-const fakeDoc = { createElement: (t) => makeEl(t) };
+const fakeDoc = {
+  createElement: (t) => makeEl(t),
+  // 2026-10-30：波形 SVG（pulse 模块）经 createElementNS 创建；假 DOM 同样记录属性/子节点。
+  createElementNS: (_ns, t) => makeEl(t),
+};
 globalThis.document = fakeDoc; // 模块 render 只经 globalThis.document（顶层不摸）
 
 // 与真实 DOM textContent 语义一致：子树文本无分隔拼接。
@@ -113,7 +122,10 @@ function findAll(el, cls, acc = []) {
 // quota（资源包剩余 %）+ session（会话簇：tokens 万/命中/轮/请求）+ tools（工具/失败）+
 // credits（会话累计）+ turnsec（最新一轮秒）；新增 tools 模块；pack/session 恢复 strip 迷你槽。
 // 哨兵 = 含 session/tools/credits 且不含 model（v4/v5/v6 存档 → 整条回落 v7）。
-const EXPECTED_IDS = ['usage', 'session', 'sessions', 'models', 'consumption', 'cache', 'speed', 'tools', 'pack', 'mascot', 'heatmap', 'metrics'];
+// v8（2026-10-30 用户裁定）：面板顶部新增 pulse（用量波形，full）+ turnspeed（逐轮生成速度，full）；
+// usage（用量节奏）与 consumption 今日行重复，按"删重复"裁定整体删除（含 strip 无槽）。
+// 二者皆 panel 专有（无 renderMini/slotIds），不影响 v7 六槽哨兵。
+const EXPECTED_IDS = ['pulse', 'turnspeed', 'session', 'sessions', 'models', 'consumption', 'cache', 'speed', 'tools', 'pack', 'mascot', 'heatmap', 'metrics'];
 
 const widget = await import('../app/widget.js'); // 先 widget：验证注册表确实从空开始
 test('pre-modules registry is empty; importing modules.js registers the P1.5 module set in order', async () => {
@@ -124,7 +136,7 @@ test('pre-modules registry is empty; importing modules.js registers the P1.5 mod
   assert.equal(mods.some((m) => m.id === 'quota-5h' || m.id === 'quota-week'), false,
     'P1.5：假额度条模块已删除（用户裁定：Qoder 无 5h/周额度上限）');
   for (const m of mods) {
-    if (m.id === 'models') continue; // 修订④全宽卡片：supports:['full']/defaultSize:'full'（下方单独断言）
+    if (['models', 'pulse', 'turnspeed'].includes(m.id)) continue; // 全宽卡片：supports:['full']/defaultSize:'full'（下方单独断言）
     assert.deepEqual(m.supports, ['half', 'full'], `${m.id} supports`);
     // P2 预览裁定：本会话 byModel 表（目标 2）、会话明细手风琴（验收 2）、时长三行（目标 4）
     // 均只存在于 full 分支——模块须以 full 进面板，否则真机不可达。其余模块维持 P1.5 的 half 紧凑形态。
@@ -144,10 +156,21 @@ test('pre-modules registry is empty; importing modules.js registers the P1.5 mod
   // tools←tools。每个槽都必须有 renderMini 变体（哨兵 every(hasMini) 仍是回落前提）。
   const miniIds = mods.filter((m) => typeof m.renderMini === 'function').map((m) => m.id);
   assert.deepEqual(miniIds.sort(), ['consumption', 'pack', 'session', 'speed', 'tools']);
-  const usage = mods.find((m) => m.id === 'usage');
-  assert.equal(usage.slotIds, undefined, 'usage 无迷你槽（面板 render 保留）');
-  assert.equal(typeof usage.renderMini, 'undefined');
-  assert.equal(usage.title, '用量节奏');
+  // v8：usage（用量节奏）已删（与 consumption 重复）；波形/逐轮速度均为 full 卡片，panel 专有。
+  assert.equal(mods.some((m) => m.id === 'usage'), false, 'usage 模块删除（2026-10-30 用户裁定：删重复）');
+  const pulse = mods.find((m) => m.id === 'pulse');
+  assert.equal(pulse.title, '用量波形');
+  assert.deepEqual(pulse.supports, ['full']);
+  assert.equal(pulse.defaultSize, 'full');
+  assert.equal(pulse.slotIds, undefined, 'pulse 非 strip 槽');
+  assert.equal(typeof pulse.renderMini, 'undefined');
+  assert.equal(typeof pulse.render, 'function');
+  const turnspeed = mods.find((m) => m.id === 'turnspeed');
+  assert.equal(turnspeed.title, '逐轮生成速度');
+  assert.deepEqual(turnspeed.supports, ['full']);
+  assert.equal(turnspeed.defaultSize, 'full');
+  assert.equal(turnspeed.slotIds, undefined, 'turnspeed 非 strip 槽');
+  assert.equal(typeof turnspeed.renderMini, 'undefined');
   const consumption = mods.find((m) => m.id === 'consumption');
   assert.deepEqual(consumption.slotIds, ['tokens', 'credits'], 'consumption 经 slotIds 服务 tokens（末轮计费输入）+ credits（会话累计）两槽');
   const speed = mods.find((m) => m.id === 'speed');
@@ -169,6 +192,7 @@ test('pre-modules registry is empty; importing modules.js registers the P1.5 mod
   assert.equal(typeof tools.renderMini, 'function');
   assert.equal(tools.title, '工具与失败');
   assert.equal(typeof modules.pickPack, 'function');
+  assert.equal(typeof modules.quotaAgg, 'function', 'quotaAgg：套餐资源包聚合（addOn + dedicated，2026-10-30 用户反馈）');
 });
 
 // ---------------------------------------------------------------- pickPack
@@ -200,58 +224,162 @@ test('pickPack: T12 真机 HEAD（addOnQuota.remaining）+ 钉死旧链兜底 + 
   });
 });
 
-// ---------------------------------------------------------------- usage（P1.5：用量节奏，本地口径如实呈现）
-test('usage full：近5小时/本周两行 N cr（fmtCredits+cr 后缀）；token 非零才追加 · in/out；billedInput 追加紧凑 · ≈Nk tok（source 定 ≈）；无 bar/刻度/百分比/徽标/倒计时', async () => {
+// ---------------------------------------------------------------- pulse（用量波形）/ turnspeed（逐轮生成速度）
+// v8（2026-10-30 用户裁定，批准静态预览）：pulse = 三页签（近1小时/近24小时/全程，默认全程）+
+// 名义合计/实扣/峰值 + SVG 面积波形（峰值点）+ 起止轴 + 每格脚注；tokens 口径（BYOK）纵轴换输出量。
+// turnspeed = 每模型一行：参与/可测轮数 + 平均 tps + min–max + 每轮柱（按模型最高轮归一，虚线 = 平均）。
+// 空态如实说明原因，绝不回落其它会话数据。
+test('pulse full：三页签默认「全程」+ 名义/实扣/峰值 + SVG 波形/峰值点 + 起止轴/每格脚注；页签切换就地重绘', async () => {
   const { getModules } = await import('../app/widget.js');
-  const def = getModules().find((m) => m.id === 'usage');
-  const el = def.render({ size: 'full', state: syncActive(mock), fmt: (await import('../app/format.js')) });
-  const t = textOf(el);
-  assert.match(t, /近5小时35 cr · 482\.1k in \/ 31\.8k out · 45\.6k tok/); // 34.8→'35'；runtime-config source → 无 ≈
-  assert.match(t, /本周143 cr · 3912\.8k in \/ 260\.4k out · ≈310\.0k tok/); // fallback200k → ≈
-  assert.equal(findAll(el, 'qum-bar').length, 0, '用量节奏无进度条（无额度上限可言）');
-  assert.equal(findAll(el, 'qum-pace-tick').length, 0);
-  assert.doesNotMatch(t, /本地|账户|%/, '无徽标无百分比——本地口径由模块标题「用量节奏」承担');
-  assert.doesNotMatch(t, /重置|倒计时|\d+h\d+m/);
-  // token 全 0（真机实况）→ 无 · in/out 段，但计费输入派生行照出（真机行形态「近5小时 123 cr · ≈45k tok」）
-  const zeroTok = JSON.parse(JSON.stringify(mock));
-  zeroTok.local.window5h.input = 0;
-  zeroTok.local.window5h.output = 0;
-  const el2 = def.render({ size: 'full', state: syncActive(zeroTok), fmt: {} });
-  const rows = findAll(el2, 'qum-line');
-  assert.equal(textOf(rows[0]), '近5小时35 cr · 45.6k tok', 'token 全 0 → in/out 段省略，billed 段保留');
-  assert.match(textOf(rows[1]), /本周.*in \/ .* out/, '另一窗口有 token 仍带 in/out');
-  // billedInput null（升级前缓存记录无 ratio）→ 段整体省略，不出 '≈-- tok' 噪声
-  const noBilled = JSON.parse(JSON.stringify(mock));
-  noBilled.local.window5h.billedInput = null;
-  noBilled.local.window5h.billedInputSource = null;
-  assert.equal(textOf(findAll(def.render({ size: 'full', state: syncActive(noBilled), fmt: {} }), 'qum-line')[0]),
-    '近5小时35 cr · 482.1k in / 31.8k out');
+  const def = getModules().find((m) => m.id === 'pulse');
+  const el = def.render({ size: 'full', state: syncActive(mock), fmt: {} });
+  const tabs = findAll(el, 'qum-pulse-tab');
+  assert.deepEqual(tabs.map(textOf), ['近1小时', '近24小时', '全程']);
+  assert.equal(tabs.find((t) => t.classList.contains('on'))._text, '全程', '默认全程（信息量最大）');
+  assert.deepEqual(findAll(el, 'qum-pulse-stat-label').map(textOf), ['名义合计', '实扣', '峰值']);
+  assert.deepEqual(findAll(el, 'qum-pulse-stat-value').map(textOf), ['53.6 cr', '10 cr', '50 cr']);
+  const svg = findAll(el, 'qum-pulse-wave')[0];
+  assert.ok(svg, 'SVG 波形存在');
+  assert.equal(svg.attrs.viewBox, '0 0 644 96');
+  assert.ok(findAll(svg, 'qum-pulse-area').length === 1 && findAll(svg, 'qum-pulse-line').length === 1, '面积 + 线');
+  assert.equal(findAll(svg, 'qum-pulse-peak').length, 1, '峰值点');
+  assert.match(textOf(findAll(el, 'qum-pulse-axis')[0]), /现在/);
+  assert.match(textOf(findAll(el, 'qum-pulse-foot')[0]), /每格 12 小时 · 名义 credits（含免扣）· 本窗口实扣 10 cr \/ 免扣 43.6 cr/);
+  assert.match(textOf(findAll(el, 'qum-pulse-chip')[0]), /本会话 · qfmodel|本会话 · --/);
+  // 页签切换：h1 统计/脚注就地更新（同一 DOM 树，不重拉数据）
+  tabs[0].fire('click');
+  const tabs2 = findAll(el, 'qum-pulse-tab');
+  assert.equal(tabs2.find((t) => t.classList.contains('on'))._text, '近1小时');
+  assert.deepEqual(findAll(el, 'qum-pulse-stat-value').map(textOf), ['4.6 cr', '1.2 cr', '3.2 cr']);
+  assert.match(textOf(findAll(el, 'qum-pulse-foot')[0]), /每格 1 分钟/);
+  tabs2[2].fire('click'); // 复位全程（模块内存态不污染其它用例）
+  assert.equal(findAll(el, 'qum-pulse-tab').find((t) => t.classList.contains('on'))._text, '全程');
 });
 
-test('usage half：仅「近5小时」一行（与 full 首行同规：cr + 非零 in/out + billed 段；无 bar）；升级前 state 无 credits → -- cr 诚实降级', async () => {
+test('pulse tokens 口径：BYOK 会话改输出量（输出合计/峰值/每格，无 cr）；无 active / 无会话 / 无波形 → 三种空态说明原因', async () => {
   const { getModules } = await import('../app/widget.js');
-  const def = getModules().find((m) => m.id === 'usage');
-  const el = def.render({ size: 'half', state: syncActive(mock), fmt: {} });
-  const rows = findAll(el, 'qum-line');
-  assert.equal(rows.length, 1);
-  assert.equal(textOf(rows[0]), '近5小时35 cr · 482.1k in / 31.8k out · 45.6k tok'); // 去重（修订②）：今日归「token 消耗」
-  assert.equal(findAll(el, 'qum-bar').length, 0);
-  const legacy = JSON.parse(JSON.stringify(mock));
-  delete legacy.local.window5h.credits;
-  assert.match(textOf(def.render({ size: 'half', state: syncActive(legacy), fmt: {} })), /近5小时--\s*cr/);
+  const def = getModules().find((m) => m.id === 'pulse');
+  const win = (over) => ({ step: 60_000, n: 2, from: 1791604680000, to: 1791604740000, vals: [0, 0], outs: [100, 200],
+    counts: [1, 1], total: 0, billTotal: null, freeTotal: null, peak: 0, peakAt: null, peakOut: 200, outTotal: 300, rows: 2, ...over });
+  const st = JSON.parse(JSON.stringify(mock));
+  st.local.active.session = { ...st.local.active.session, billingMode: 'tokens' };
+  st.local.active.pulse = { sessionId: 'mock-session-abc123', h1: win({}), h24: win({}), all: win({ n: 2 }) };
+  const el = def.render({ size: 'full', state: st, fmt: {} });
+  assert.deepEqual(findAll(el, 'qum-pulse-stat-label').map(textOf), ['输出合计', '峰值', '每格']);
+  assert.deepEqual(findAll(el, 'qum-pulse-stat-value').map(textOf), ['300 tok', '200 tok', '1 分钟']);
+  assert.match(textOf(findAll(el, 'qum-pulse-foot')[0]), /输出 tokens.*纵轴自动换为输出量/);
+  assert.doesNotMatch(textOf(findAll(el, 'qum-pulse-stats')[0]), /cr/);
+  // 空态三态
+  const noActive = JSON.parse(JSON.stringify(mock));
+  delete noActive.local.active;
+  assert.match(textOf(def.render({ size: 'full', state: noActive, fmt: {} })), /未识别当前会话（客户端未暴露会话身份）/);
+  const noSess = { sessionId: 'S-x', lastTurn: null, session: null, pulse: null, turnSpeeds: null };
+  assert.match(textOf(def.render({ size: 'full', state: { ...mock, local: { ...mock.local, active: noSess } }, fmt: {} })), /本会话暂无回合/);
+  const noPulse = { ...mock.local.active, pulse: null };
+  assert.match(textOf(def.render({ size: 'full', state: { ...mock, local: { ...mock.local, active: noPulse } }, fmt: {} })), /回合未落盘 usage/);
+});
+
+test('turnspeed full：每模型 可测/参与轮 + 平均 tps + min–max + 每轮柱（峰值柱高亮）/平均虚线；全不可测 → 说明原因；无 active → 未识别', async () => {
+  const { getModules } = await import('../app/widget.js');
+  const def = getModules().find((m) => m.id === 'turnspeed');
+  const el = def.render({ size: 'full', state: syncActive(mock), fmt: {} });
+  assert.deepEqual(findAll(el, 'qum-tps-name').map(textOf), ['qfmodel', 'Mimo-V2.6']);
+  assert.deepEqual(findAll(el, 'qum-tps-meta').map(textOf), [
+    '3/3 轮 · 平均 56.5 tps · 40–70',
+    '1/1 轮 · 平均 46 tps · 46–46',
+  ]);
+  const bars = findAll(el, 'qum-tps-bar');
+  assert.equal(bars.length, 4, '每轮一根柱（两模型 3+1 轮）');
+  assert.equal(findAll(el, 'qum-tps-bar').filter((b) => b.classList.contains('p')).length, 2, '每模型最高轮高亮');
+  assert.equal(findAll(el, 'qum-tps-mean').length, 2, '每模型一条平均虚线');
+  assert.match(textOf(findAll(el, 'qum-tps-chip')[0]), /本会话 · 23 轮 · 4 轮可测/);
+  assert.match(textOf(findAll(el, 'qum-tps-foot')[0]), /算术平均.*加权/);
+  // 全不可测（timed 全 0）→ 说明原因；行仍如实列出
+  const unp = JSON.parse(JSON.stringify(mock));
+  unp.local.active.turnSpeeds = JSON.parse(JSON.stringify(unp.local.active.turnSpeeds));
+  unp.local.active.turnSpeeds.rows = unp.local.active.turnSpeeds.rows.map((r) => ({ ...r, timed: 0, mean: null, min: null, max: null, series: [] }));
+  unp.local.active.turnSpeeds.timedTurns = 0;
+  const e2 = def.render({ size: 'full', state: unp, fmt: {} });
+  assert.match(textOf(e2), /本会话回合未配对日志实测秒，逐轮 tps 无法测算/);
+  assert.deepEqual(findAll(e2, 'qum-tps-meta').map(textOf), ['3/3 轮 · 无实测秒（-- tps）', '1/1 轮 · 无实测秒（-- tps）']);
+  // 无 active → 未识别
+  const noActive = JSON.parse(JSON.stringify(mock));
+  delete noActive.local.active;
+  assert.match(textOf(def.render({ size: 'full', state: noActive, fmt: {} })), /未识别当前会话/);
+});
+
+// v8.1（2026-10-30 用户追加）：柱可点选查看该轮精确 tps。读数紧跟所选行柱图下方；
+// 同一时刻仅一根选中（跨行也互斥）；重复点取消、点其它柱切换；面板轮询重渲染后保留
+// （按 会话+模型+轮开始时间 记忆）；切会话自动失效且不复活。键盘 Enter/Space 与点击等效。
+test('turnspeed 点选柱：所选行下方出「第 N 轮 · HH:MM · tps」读数；切换/取消/重渲染保留/切会话失效；键盘等效', async () => {
+  const { getModules } = await import('../app/widget.js');
+  const def = getModules().find((m) => m.id === 'turnspeed');
+  const state = syncActive(mock);
+  const hm = (ts) => {
+    const d = new Date(ts);
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  };
+  const el = def.render({ size: 'full', state, fmt: {} });
+  assert.equal(findAll(el, 'qum-tps-pick').length, 0, '默认无读数');
+  const bars0 = findAll(el, 'qum-tps-bar');
+  assert.equal(bars0[0].getAttribute('role'), 'button', '柱可交互');
+  assert.equal(bars0[0].getAttribute('tabindex'), '0', '柱可 Tab 聚焦');
+  assert.equal(bars0[0].getAttribute('aria-pressed'), 'false');
+
+  bars0[2].fire('click'); // qfmodel 第 3 轮
+  let picks = findAll(el, 'qum-tps-pick');
+  assert.equal(picks.length, 1);
+  assert.equal(textOf(picks[0]), `第 3 轮 · ${hm(1791604700000)} · 54.5 tps`);
+  assert.equal(findAll(el, 'qum-tps-row')[0].children.includes(picks[0]), true, '读数挂在所选行内');
+  let bars = findAll(el, 'qum-tps-bar');
+  assert.equal(bars[2].getAttribute('aria-pressed'), 'true');
+  assert.equal(bars[2].classList.contains('on'), true, '选中柱高亮');
+
+  // 点第二行柱 → 切换；跨行仍只有一条读数
+  bars[3].fire('click');
+  picks = findAll(el, 'qum-tps-pick');
+  assert.equal(picks.length, 1);
+  assert.equal(textOf(picks[0]), `第 1 轮 · ${hm(1791580000000)} · 46 tps`);
+  assert.equal(findAll(el, 'qum-tps-row')[1].children.includes(picks[0]), true);
+
+  // 再点同一根 → 取消
+  bars = findAll(el, 'qum-tps-bar');
+  bars[3].fire('click');
+  assert.equal(findAll(el, 'qum-tps-pick').length, 0);
+  assert.equal(findAll(el, 'qum-tps-bar')[3].getAttribute('aria-pressed'), 'false');
+
+  // 键盘 Enter / Space 与点击等效
+  findAll(el, 'qum-tps-bar')[0].fire('keydown', { key: 'Enter', preventDefault() {} });
+  assert.equal(textOf(findAll(el, 'qum-tps-pick')[0]), `第 1 轮 · ${hm(1791579000000)} · 45 tps`);
+  findAll(el, 'qum-tps-bar')[0].fire('keydown', { key: ' ', preventDefault() {} });
+  assert.equal(findAll(el, 'qum-tps-pick').length, 0, 'Space 再点同一根取消');
+
+  // 轮询重渲染（同 state 新 DOM）→ 选中保留
+  findAll(el, 'qum-tps-bar')[0].fire('click');
+  const el2 = def.render({ size: 'full', state, fmt: {} });
+  const picks2 = findAll(el2, 'qum-tps-pick');
+  assert.equal(picks2.length, 1);
+  assert.equal(textOf(picks2[0]), `第 1 轮 · ${hm(1791579000000)} · 45 tps`);
+  assert.equal(findAll(el2, 'qum-tps-bar')[0].classList.contains('on'), true);
+
+  // 切会话 → 失效且清空；回到原会话也不复活（绝不跨会话残留）
+  const other = JSON.parse(JSON.stringify(state));
+  other.local.active.sessionId = 'mock-session-other';
+  assert.equal(findAll(def.render({ size: 'full', state: other, fmt: {} }), 'qum-tps-pick').length, 0);
+  assert.equal(findAll(def.render({ size: 'full', state, fmt: {} }), 'qum-tps-pick').length, 0, '切会话已清空');
 });
 
 // ---------------------------------------------------------------- strip 迷你槽（v5 读 lastTurn）
 // P2 用户裁定（v5 两行式 → v6 单行四槽）：槽数据源全部换到 local.lastTurn——tokens 槽 = consumption.renderMini
-// （该轮计费输入 [≈]billedInput；tokens 口径用真实提示输入总量（input 已含 cacheRead）；≈ 仅 billedSource
-// 非 runtime-config）；credits 槽 = consumption.renderMini（该轮 credits「N.N cr」）；turnsec 槽 =
+// （该轮计费输入 billedInput；tokens 口径用真实提示输入总量（input 已含 cacheRead）；
+// 值来自 billedSource，展示不为来源加标记）；credits 槽 = consumption.renderMini（该轮 credits「N.N cr」）；turnsec 槽 =
 // speed.renderMini（该轮 turnSec 一位小数，秒为单位绝无 min）；tps 槽 = speed.renderMini（该轮
 // outTps 生成速度）。lastTurn 缺 → 各槽 '--' 占位（整条空态由 widget.renderStrip 承担）。
-test('v7 consumption renderMini: tokens 槽=末轮计费输入（credits 口径 [≈]N,NNN tok；runtime-config 无 ≈；null→-- tok）；credits 槽=会话累计 credits（tokens 口径不适用 → -- cr）', async () => {
+test('v7 consumption renderMini: tokens 槽=末轮计费输入（credits 口径 N,NNN tok；null→-- tok）；credits 槽=会话累计 credits（tokens 口径不适用 → -- cr）', async () => {
   const { getModules } = await import('../app/widget.js');
   const def = getModules().find((m) => m.id === 'consumption');
   const mini = (slot, state) => textOf(def.renderMini({ size: 'mini', slot, state: syncActive(state), fmt: {} }));
-  assert.equal(mini('tokens', mock), '≈48,123 tok');       // fallback200k → ≈
+  assert.equal(mini('tokens', mock), '48,123 tok');       // fallback200k；无估算标记
   assert.equal(mini('credits', mock), '123.4 cr');          // v7：会话累计 credits（不再读末轮 0.6）
   const rt = JSON.parse(JSON.stringify(mock));
   rt.local.lastTurn.billedSource = 'runtime-config';
@@ -272,16 +400,16 @@ test('v7 consumption renderMini: tokens 槽=末轮计费输入（credits 口径 
   assert.equal(mini('credits', noSess), '-- cr');
 });
 
-test('v7 speed renderMini: tps 槽=会话 outTps30「⚡ ~N.N t/s」（缺失回落末轮 outTps）/turnsec 槽=末轮「N.N s」', async () => {
+test('v7 speed renderMini: tps 槽=会话 outTps30「⚡ N.N t/s」（缺失回落末轮 outTps）/turnsec 槽=末轮「N.N s」', async () => {
   const { getModules } = await import('../app/widget.js');
   const def = getModules().find((m) => m.id === 'speed');
   const mini = (slot, state) => textOf(def.renderMini({ size: 'mini', slot, state: syncActive(state), fmt: {} }));
-  assert.equal(mini('tps', mock), '⚡ ~45.6 t/s'); // 原生口径：会话近30分钟生成速度（不是末轮 56.5）
+  assert.equal(mini('tps', mock), '⚡ 45.6 t/s'); // 原生口径：会话近30分钟生成速度（不是末轮 56.5）
   assert.equal(mini('turnsec', mock), '32.4 s');
   assert.doesNotMatch(mini('turnsec', mock), /min/);
   const noTps30 = JSON.parse(JSON.stringify(mock));
   delete noTps30.local.session.outTps30;
-  assert.equal(mini('tps', noTps30), '⚡ ~56.5 t/s', '会话速度缺失 → 回落末轮 outTps（诚实降级，不编造）');
+  assert.equal(mini('tps', noTps30), '⚡ 56.5 t/s', '会话速度缺失 → 回落末轮 outTps（诚实降级，不编造）');
   const noOut = JSON.parse(JSON.stringify(mock));
   noOut.local.session.outTps30 = null;
   noOut.local.lastTurn.outTps = null;
@@ -292,20 +420,20 @@ test('v7 speed renderMini: tps 槽=会话 outTps30「⚡ ~N.N t/s」（缺失回
   const noLt = JSON.parse(JSON.stringify(mock));
   noLt.local.lastTurn = null;
   assert.equal(mini('turnsec', noLt), '--');
-  assert.equal(mini('tps', noLt), '⚡ ~45.6 t/s', 'tps 只依赖会话聚合，末轮缺失不影响');
+  assert.equal(mini('tps', noLt), '⚡ 45.6 t/s', 'tps 只依赖会话聚合，末轮缺失不影响');
 });
 
-test('v7 session renderMini（会话簇）: tokens 万单位 [≈] + 命中% + 轮/请求；命中率缺失 → 整段省略；tokens 口径用真实总量', async () => {
+test('v7 session renderMini（会话簇）: tokens 万单位 [] + 命中% + 轮/请求；命中率缺失 → 整段省略；tokens 口径用真实总量', async () => {
   const { getModules } = await import('../app/widget.js');
   const def = getModules().find((m) => m.id === 'session');
   const mini = (state) => textOf(def.renderMini({ size: 'mini', slot: 'session', state: syncActive(state), fmt: {} }));
-  assert.equal(mini(mock), '≈12.8万 tok · 86.1% 命中 · 23 轮 · 187 次'); // fallback200k → ≈；轮≠turns，次=请求
+  assert.equal(mini(mock), '12.8万 tok · 86.1% 命中 · 23 轮 · 187 次'); // fallback200k；无估算标记；轮≠turns，次=请求
   const rt = JSON.parse(JSON.stringify(mock));
   rt.local.contextWindow = { value: 200000, source: 'runtime-config' };
-  assert.equal(mini(rt), '12.8万 tok · 86.1% 命中 · 23 轮 · 187 次', 'runtime-config → 无 ≈');
+  assert.equal(mini(rt), '12.8万 tok · 86.1% 命中 · 23 轮 · 187 次', 'runtime-config；无估算标记');
   const noHit = JSON.parse(JSON.stringify(mock));
   noHit.local.session.cacheHitRate = null;
-  assert.equal(mini(noHit), '≈12.8万 tok · 23 轮 · 187 次', '无缓存字段 → 不显示命中段（不补 0%）');
+  assert.equal(mini(noHit), '12.8万 tok · 23 轮 · 187 次', '无缓存字段 → 不显示命中段（不补 0%）');
   const tok = JSON.parse(JSON.stringify(mock));
   tok.local.billingMode = 'tokens';
   // 口径裁定（2026-10-27）：input_tokens 已含缓存命中（cacheRead ⊂ input），tokens 口径的
@@ -354,12 +482,12 @@ test('session 面板（面板专有）：full 五行 本会话/近30分钟/计�
   const def = getModules().find((m) => m.id === 'session');
   const full = def.render({ size: 'full', state: syncActive(mock), fmt: {} });
   assert.deepEqual(findAll(full, 'qum-line').map(textOf),
-    ['本会话123 cr · 23 轮 · 187 次', '近30分钟2.1 cr/min', '计费输入≈128.0k tok', '会话mock-ses', '模型qfmodel',
-      'qfmodel · 0.6 cr · ≈48.1k tok · ~56.5 tps · 66s · 3 轮',
-      'Mimo-V2.6 (byok) · -- cr · 104.0k tok · ~46 tps · 41s · 1 轮']); // byModel 表（P2；T16 估算速率带 ~）
+    ['本会话123.4 cr · 23 轮 · 187 次', '近30分钟2.1 cr/min', '计费输入128.0k tok', '会话mock-ses', '模型qfmodel',
+      'qfmodel · 0.6 cr · 48.1k tok · 56.5 tps · 66s · 3 轮',
+      'Mimo-V2.6 (byok) · -- cr · 104.0k tok · 46 tps · 41s · 1 轮']); // byModel 表（P2；T16 估算速率、一位小数、无标记）
   assert.doesNotMatch(textOf(full), /平均回合/, '去重（修订②）：平均耗时只归「吞吐/时长」');
   const half = def.render({ size: 'half', state: syncActive(mock), fmt: {} });
-  assert.deepEqual(findAll(half, 'qum-line').map(textOf), ['本会123 cr']);
+  assert.deepEqual(findAll(half, 'qum-line').map(textOf), ['本会123.4 cr']);
   // id/credits 为 null（会话未知/旧快照）→ 各行 '--'，行不消失
   const none = { ...mock, local: { ...mock.local, session: { id: null, credits: null, turns: 0, rateCpm30: null } } };
   assert.deepEqual(findAll(def.render({ size: 'full', state: syncActive(none), fmt: {} }), 'qum-line').map(textOf),
@@ -453,20 +581,20 @@ test('session/byModel 模型行：目录 key 为 byok:<uuid> 时按显示名归�
 
 // ---------------------------------------------------------------- sessions（会话明细，新模块）
 // 数据源 state.local.sessions（daemon sessionsSummary 产出，≤10、lastTs 降序）。每行
-// 「<id8> · N cr · [≈]Nk tok · R 轮 · Q 次 · <model>」；full = 逐行；half =「近 N 个会话」+ 首行；
-// 源缺失/空表 → 一行「暂无数据」；单项 null → 该段 '--'（≈ 仅 billedSource fallback/mixed）。
-test('sessions 会话明细：full 逐行（id8/cr/[≈]tok/轮/次/model，≈ 仅 fallback/mixed）；half 近 N + 首行；空源 → 暂无数据', async () => {
+// 「<id8> · N cr · Nk tok · R 轮 · Q 次 · <model>」；full = 逐行；half =「近 N 个会话」+ 首行；
+// 源缺失/空表 → 一行「暂无数据」；单项 null → 该段 '--'。
+test('sessions 会话明细：full 逐行（id8/cr/tok/轮/次/model；不加估算标记）；half 近 N + 首行；空源 → 暂无数据', async () => {
   const { getModules } = await import('../app/widget.js');
   const def = getModules().find((m) => m.id === 'sessions');
   const full = def.render({ size: 'full', state: syncActive(mock), fmt: {} });
   assert.deepEqual(findAll(full, 'qum-line').map(textOf), [
-    'mock-ses · 123 cr · ≈128.0k tok · 23 轮 · 187 次 · qfmodel', // mixed → ≈
-    'mock-ses · 88 cr · 96.0k tok · 17 轮 · 96 次 · qfmodel',    // runtime-config → 无 ≈（def456 slice(0,8)='mock-ses'）
-    'mock-ses · 12 cr · -- tok · 5 轮 · 12 次 · qfmodel-pro',    // billedInput null → -- tok（行不消失）
+    'mock-ses · 123.4 cr · 128.0k tok · 23 轮 · 187 次 · qfmodel', // mixed；无估算标记
+    'mock-ses · 88.2 cr · 96.0k tok · 17 轮 · 96 次 · qfmodel',    // runtime-config；无估算标记（def456 slice(0,8)='mock-ses'）
+    'mock-ses · 12.1 cr · -- tok · 5 轮 · 12 次 · qfmodel-pro',    // billedInput null → -- tok（行不消失）
   ]);
   const half = def.render({ size: 'half', state: syncActive(mock), fmt: {} });
   assert.deepEqual(findAll(half, 'qum-line').map(textOf),
-    ['近 3 个会话', 'mock-ses · 123 cr · ≈128.0k tok · 23 轮 · 187 次 · qfmodel']);
+    ['近 3 个会话', 'mock-ses · 123.4 cr · 128.0k tok · 23 轮 · 187 次 · qfmodel']);
   // 源缺失/乱值/空表 → 一行「暂无数据」，绝不抛
   for (const st of [{ ...mock, local: { ...mock.local, sessions: undefined } },
     { ...mock, local: { ...mock.local, sessions: [] } },
@@ -478,7 +606,7 @@ test('sessions 会话明细：full 逐行（id8/cr/[≈]tok/轮/次/model，≈ 
   }
   // 单项字段 null/乱值 → 各段 '--'（model → '--'，rounds/requests 非数 → '-- 轮' 且省次数段）
   const messy = { ...mock, local: { ...mock.local, sessions: [{ id: 'xyz', credits: null, billedInput: null, billedSource: 'fallback200k', turns: null, model: null }] } };
-  assert.match(textOf(def.render({ size: 'full', state: syncActive(messy), fmt: {} })), /xyz · -- cr · ≈-- tok · -- 轮 · --/);
+  assert.match(textOf(def.render({ size: 'full', state: syncActive(messy), fmt: {} })), /xyz · -- cr · -- tok · -- 轮 · --/);
   // T14：会话明细同样显示解析人类名（server 落盘 modelName）；byok id → 'DeepSeek-Flash'
   const named = { ...mock, local: { ...mock.local, sessions: [
     { id: 'abc', credits: 1, billedInput: 1000, billedSource: 'runtime-config', turns: 2, rounds: 2, requests: 5, model: BYOK_ID, modelName: 'DeepSeek-Flash' },
@@ -493,12 +621,12 @@ test('sessions 会话明细：full 逐行（id8/cr/[≈]tok/轮/次/model，≈ 
 });
 
 // ---------------------------------------------------------------- 其余模块
-test('consumption T12 credits 校准：half 今日 credits 行（置于 in/out 行之上）；full 5h/周/今日各行带 credits + 计费输入 ≈Nk tok 段（source 定 ≈，null 省略）', async () => {
+test('consumption T12 credits 校准：half 今日 credits 行（置于 in/out 行之上）；full 5h/周/今日各行带 credits + 计费输入 Nk tok 段（null 省略）', async () => {
   const { getModules } = await import('../app/widget.js');
   const def = getModules().find((m) => m.id === 'consumption');
   const halfEl = def.render({ size: 'half', state: syncActive(mock), fmt: {} });
   const half = textOf(halfEl);
-  assert.match(half, /今日53\s*cr/); // fmtCredits(mock today 52.6) = '53'
+  assert.match(half, /今日52\.6\s*cr/); // fmtCredits(mock today 52.6) = '53'
   assert.match(half, /今日964\.3k in \/ 63\.1k out/); // in/out 行保留
   const halfLines = findAll(halfEl, 'qum-line');
   assert.equal(halfLines.length, 2);
@@ -507,19 +635,19 @@ test('consumption T12 credits 校准：half 今日 credits 行（置于 in/out �
   assert.doesNotMatch(half, /5h/);
   assert.doesNotMatch(half, /tok/, 'half 不变：计费输入段仅 full 出');
   const full = textOf(def.render({ size: 'full', state: syncActive(mock), fmt: {} }));
-  assert.match(full, /5h482\.1k in \/ 31\.8k out · 35 cr · 45\.6k tok/); // runtime-config → 无 ≈
-  assert.match(full, /周3912\.8k in \/ 260\.4k out · 143 cr · ≈310\.0k tok/); // fallback200k → ≈
-  assert.match(full, /今日964\.3k in \/ 63\.1k out · 53 cr · ≈82\.0k tok/); // mixed → ≈
+  assert.match(full, /5h482\.1k in \/ 31\.8k out · 34.8 cr · 45\.6k tok/); // runtime-config；无估算标记
+  assert.match(full, /周3912\.8k in \/ 260\.4k out · 142.6 cr · 310\.0k tok/); // fallback200k；无估算标记
+  assert.match(full, /今日964\.3k in \/ 63\.1k out · 52.6 cr · 82\.0k tok/); // mixed；无估算标记
   // 旧 state（窗口无 credits 字段，如升级前落盘的 state.json 快照）→ '-- cr'，不崩溃
   const legacy = JSON.parse(JSON.stringify(mock));
   delete legacy.local.today.credits;
   assert.match(textOf(def.render({ size: 'half', state: syncActive(legacy), fmt: {} })), /今日--\s*cr/);
-  // billedInput null（旧缓存记录无 ratio）→ full 行无计费段、不出 '≈--'，行不消失
+  // billedInput null（旧缓存记录无 ratio）→ full 行无计费段、不出 '--'，行不消失
   const noBilled = JSON.parse(JSON.stringify(mock));
   for (const k of ['window5h', 'week', 'today']) { noBilled.local[k].billedInput = null; noBilled.local[k].billedInputSource = null; }
   const fb = textOf(def.render({ size: 'full', state: syncActive(noBilled), fmt: {} }));
   assert.doesNotMatch(fb, /tok/);
-  assert.match(fb, /5h482\.1k in \/ 31\.8k out · 35 cr/);
+  assert.match(fb, /5h482\.1k in \/ 31\.8k out · 34.8 cr/);
 });
 
 test('cache：fmtPct 数值路径；null → -- + title 说明；整宽全 null → 追加 本地无缓存数据 note（T12 真机：客户端不落盘缓存字段）', async () => {
@@ -557,10 +685,10 @@ test('speed 吞吐/时长（P2 去重+时长集中）：full 行序 最新一轮
   assert.equal(typeof def.renderMini, 'function', 'speed 提供 tps + turnsec 两 mini 变体');
   const full = def.render({ size: 'full', state: syncActive(mock), fmt: {} });
   assert.deepEqual(findAll(full, 'qum-line').map(textOf),
-    ['最新一轮32.4 s', '平均回合45 s', '总耗时4m', '生成速度~45.6 tps · 近30分钟', '近30分钟2.1 cr/min']); // T16：速率 = 估算（带 ~，一位小数）÷ 实测秒
-  // 去重（修订②）：计费输入行删除；本模块不再出现 ≈ 估算段
+    ['最新一轮32.4 s', '平均回合45 s', '总耗时4m', '生成速度45.6 tps · 近30分钟', '近30分钟2.1 cr/min']); // T16：速率 = 估算（一位小数，无标记）÷ 实测秒
+  // 去重（修订②）：计费输入行删除；本模块不再出现估算标记段
   assert.doesNotMatch(textOf(full), /计费输入/);
-  assert.doesNotMatch(textOf(full), /≈/);
+  assert.doesNotMatch(textOf(full), /[\u2248~]/);
   // 诚实注记（T16 口径：正文估算 ÷ 实测纯模型秒）保留；死指标不回归
   assert.match(findAll(full, 'qum-note').map(textOf).join('|'), /生成速度 = 最佳输出（真值优先，缺失才估算）÷ 实测纯模型秒/);
   assert.doesNotMatch(textOf(full), /输入吞吐/);
@@ -600,6 +728,50 @@ test('pack（P1.5 真仪表升级）：half 仍「剩余 N」（pickPack 链，�
   assert.equal(typeof def.renderMini, 'function', 'v7：pack 恢复 quota 迷你槽（剩余%）');
 });
 
+// ---------------------------------------------------------------- quotaAgg（2026-10-30 用户反馈：套餐分母漏专属积分）
+// 用户截图：userQuota 2,000/2,000、addOnQuota 222/2,000、dedicated「Qwen 专属积分」0/2,000。
+// 原生用量页把 addOnQuota + 每个 dedicatedResourcePackages[] 都计入额度（套餐内 Credits /
+// 资源包 / 个人专属资源包）；插件此前只读 addOnQuota → 1,778/2,000 = 89%，分母漏掉专属积分。
+// quotaAgg 聚合 addOn + dedicated（不聚合 orgResourcePackage：原生页未展示、无真机实据），
+// strip/pack/mascot 同源；plan credits（userQuota）不是资源包，仍不计入。
+test('quotaAgg：资源包聚合 = addOnQuota + dedicatedResourcePackages（分母含专属积分）；strip/pack/mascot 同源；无 total → null 不猜', async () => {
+  const modules = await import('../app/modules.js');
+  const { getModules } = await import('../app/widget.js');
+  const acct = {
+    source: 'widget',
+    fetchedAt: 1,
+    raw: { usage: { qoderUsage: {
+      userQuota: { total: 2000, used: 2000, remaining: 0, percentage: 100 },
+      addOnQuota: { total: 2000, used: 222, remaining: 1778, percentage: 11.1 },
+      dedicatedResourcePackages: [{ name: 'Qwen 专属积分', total: 2000, used: 0, remaining: 2000 }],
+    } } },
+  };
+  assert.deepEqual(modules.quotaAgg(acct), {
+    used: 222, total: 4000, remaining: 3778, ratio: 0.9445,
+    parts: [
+      { name: '资源包', used: 222, total: 2000, remaining: 1778 },
+      { name: 'Qwen 专属积分', used: 0, total: 2000, remaining: 2000 },
+    ],
+  });
+  const st = { ...mock, account: acct };
+  const packDef = getModules().find((m) => m.id === 'pack');
+  assert.equal(textOf(packDef.renderMini({ size: 'mini', slot: 'quota', state: st, fmt: {} })), '◔ 94.5%', 'strip：剩余 3778/4000');
+  const full = packDef.render({ size: 'full', state: st, fmt: {} });
+  assert.equal(findAll(full, 'qum-bar-fill')[0].style.width, '5.6%', '已用 222/4000 = 5.55% → 5.6%');
+  assert.match(textOf(full), /已用\s*222 \/ 4000 · 剩余 3778 cr/, '合计行（分母含专属积分）');
+  assert.match(textOf(full), /资源包\s*222 \/ 2000/, '拆分：addOn 段');
+  assert.match(textOf(full), /Qwen 专属积分\s*0 \/ 2000/, '拆分：专属积分段');
+  assert.match(textOf(packDef.render({ size: 'half', state: st, fmt: {} })), /剩余\s*3\.8k/);
+  const mascotDef = getModules().find((m) => m.id === 'mascot');
+  assert.match(textOf(mascotDef.render({ size: 'half', state: st, fmt: {} })), /🙂/);
+  // mock 不变：仅 addOn → 与旧口径完全一致（37.5%，现有用例即回归网）
+  assert.equal(textOf(packDef.renderMini({ size: 'mini', slot: 'quota', state: mock, fmt: {} })), '◔ 37.5%');
+  // 旧链/无 total → null（绝不猜；percentage-only 仍由 mascot 的 addOn 兜底路径处理）
+  assert.equal(modules.quotaAgg(null), null);
+  assert.equal(modules.quotaAgg({ raw: { resourcePack: { remaining: 42 } } }), null);
+  assert.equal(modules.quotaAgg({ raw: { usage: { qoderUsage: { addOnQuota: { percentage: 58 } } } } }), null);
+});
+
 test('mascot：P1.5 阈值 rekey 到 addOnQuota（used/total 优先、percentage 0–100 兜底）；无账户数据 🫥；有账户读不出 → 🙂 中性；P2 去重：无今日行（仅表情）', async () => {
   const { getModules } = await import('../app/widget.js');
   const def = getModules().find((m) => m.id === 'mascot');
@@ -633,9 +805,9 @@ test('metrics full：三行 总计/峰值/连续·活跃（credits 走 fmtCredit
   assert.equal(typeof def.renderMini, 'undefined', '累计指标不是 strip 槽');
   const full = def.render({ size: 'full', state: syncActive(mock), fmt: {} });
   const rows = findAll(full, 'qum-line').map(textOf);
-  assert.deepEqual(rows, ['总计1280 cr', '峰值86 cr/日', '连续4 天 · 活跃23 天']);
+  assert.deepEqual(rows, ['总计1280.4 cr', '峰值86.4 cr/日', '连续4 天 · 活跃23 天']);
   const half = def.render({ size: 'half', state: syncActive(mock), fmt: {} });
-  assert.deepEqual(findAll(half, 'qum-line').map(textOf), ['总计1280 cr']);
+  assert.deepEqual(findAll(half, 'qum-line').map(textOf), ['总计1280.4 cr']);
   // 单字段 null → 该行 '--'，行不消失（客户端允许空读数）
   const partial = JSON.parse(JSON.stringify(mock));
   partial.account.metrics = {
@@ -643,7 +815,7 @@ test('metrics full：三行 总计/峰值/连续·活跃（credits 走 fmtCredit
     longestStreakDays: 9, totalActiveDays: null, failedSources: [],
   };
   assert.deepEqual(findAll(def.render({ size: 'full', state: syncActive(partial), fmt: {} }), 'qum-line').map(textOf),
-    ['总计-- cr', '峰值86 cr/日', '连续-- 天 · 活跃-- 天']);
+    ['总计-- cr', '峰值86.4 cr/日', '连续-- 天 · 活跃-- 天']);
   // 整源缺失（旧 daemon 快照 / 未打补丁）→ 全行 --，绝不抛
   for (const st of [{ ...mock, account: null }, { ...mock, account: { ...mock.account, metrics: null } },
     { ...mock, account: { ...mock.account, metrics: 'garbage' } }]) {
@@ -669,9 +841,9 @@ test('heatmap full：14 格 CSS grid，格底色按 credits/max 缩放，title�
   assert.equal(cells.length, 14);
   assert.equal(findAll(full, 'qum-heat').length, 1);
   // max = 86.4（2026-10-09）→ 100%；52.6/86.4=60.9%→61%（非零至少 15% 保证可见）
-  assert.equal(cells[12].attrs.title, '2026-10-09 · 86 cr');
+  assert.equal(cells[12].attrs.title, '2026-10-09 · 86.4 cr');
   assert.match(String(cells[12].style.background || cells[12].style.backgroundColor), /var\(--qum-accent\) 100%/);
-  assert.equal(cells[13].attrs.title, '2026-10-10 · 53 cr');
+  assert.equal(cells[13].attrs.title, '2026-10-10 · 52.6 cr');
   assert.match(String(cells[13].style.background || cells[13].style.backgroundColor), /var\(--qum-accent\) 61%/);
   const tiny = JSON.parse(JSON.stringify(mock));
   tiny.account.heatmap.days[0] = { date: '2026-09-27', credits: 1 }; // 1/86.4 → 落在 15% 地板
@@ -699,7 +871,7 @@ test('heatmap full 单元格上限 60（90 天回包 → 最近 60 天）；half
   assert.equal(cells[59].attrs.title, '2026-12-08 · 5 cr');
   // half：mock 近 7 日 = 33.2+11.4+28.7+null+44.8+86.4+52.6 = 257.1 → 257
   const half = def.render({ size: 'half', state: syncActive(mock), fmt: {} });
-  assert.match(textOf(half), /近7日257 cr/);
+  assert.match(textOf(half), /近7日257.1 cr/);
   const allNull = JSON.parse(JSON.stringify(mock));
   allNull.account.heatmap.days = allNull.account.heatmap.days.map((d) => ({ date: d.date, credits: null }));
   assert.match(textOf(def.render({ size: 'half', state: syncActive(allNull), fmt: {} })), /近7日-- cr/);
@@ -736,7 +908,7 @@ function makeHost() {
   return host;
 }
 
-test('widget 集成：mount 后 strip 出六槽单行式（tps/quota/session/tools/credits/turnsec，无标签行）+ 尾部「分析」时刻列、panel 出 12 模块（ctx.fmt 已由 setFmt 注入）', async () => {
+test('widget 集成：mount 后 strip 出六槽单行式（tps/quota/session/tools/credits/turnsec，无标签行）+ 尾部「分析」时刻列、panel 出 13 模块（ctx.fmt 已由 setFmt 注入）', async () => {
   const mod = await import('../app/widget.js');
   mod.setState(mock);
   const host = makeHost();
@@ -752,7 +924,7 @@ test('widget 集成：mount 后 strip 出六槽单行式（tps/quota/session/too
   assert.equal(findAll(strip, 'qum-slot-label').length, 0, '无标签行（单行式）');
   const values = findAll(strip, 'qum-slot-value').map(textOf);
   assert.deepEqual(values, [
-    '⚡ ~45.6 t/s', '◔ 37.5%', '≈12.8万 tok · 86.1% 命中 · 23 轮 · 187 次',
+    '⚡ 45.6 t/s', '◔ 37.5%', '12.8万 tok · 86.1% 命中 · 23 轮 · 187 次',
     '工具 42 · 失败 3', '123.4 cr', '32.4 s',
   ]);
   assert.equal(findAll(strip, 'qum-slot').length, 6);
@@ -773,9 +945,13 @@ test('widget 集成：mount 后 strip 出六槽单行式（tps/quota/session/too
   // P2 预览裁定：吞吐/时长以 full 进面板（时长三行，目标 4）——断言三行 + fmt 注入生效
   //（round1 一位小数 / 整数秒 / fmtDur 分钟档）
   assert.match(speedCell, /最新一轮32\.4 s平均回合45 s总耗时4m/, 'setFmt(fmt) 注入 → ctx.fmt 数字已格式化（吞吐/时长 full 时长三行）');
-  const usageCell = textOf(panel.children.find((c) => c.dataset.module === 'usage'));
-  assert.match(usageCell, /近5小时35\s*cr/, 'usage half 行（P2 去重：今日归「token 消耗」）');
-  assert.doesNotMatch(usageCell, /账户|本地/, '口径由标题「用量节奏」承担，无徽标');
+  const pulseCell = textOf(panel.children.find((c) => c.dataset.module === 'pulse'));
+  assert.match(pulseCell, /用量波形/, 'v8：波形卡片进面板（默认全程）');
+  assert.match(pulseCell, /名义合计/, '波形统计行来自 active.pulse');
+  assert.match(pulseCell, /53\.6 cr/, '波形名义合计 = mock 全程 total');
+  const tpsCell = textOf(panel.children.find((c) => c.dataset.module === 'turnspeed'));
+  assert.match(tpsCell, /逐轮生成速度/, 'v8：逐轮速度卡片进面板');
+  assert.match(tpsCell, /平均 56\.5 tps/, '逐轮速度来自 active.turnSpeeds（mock）');
   const sessionsCell = textOf(panel.children.find((c) => c.dataset.module === 'sessions'));
   assert.match(sessionsCell, /会话明细/, 'sessions 面板标题');
   assert.match(sessionsCell, /23 轮 · 187 次 · qfmodel/, 'sessions 面板会话行');
@@ -850,7 +1026,7 @@ test('注册区接线：widget.js mount 惰性 import modules.js；harness 静�
 
 // ---------------------------------------------------------------- 计费口径切换（tokens，用户裁定）
 // state.local.billingMode='tokens'（当前会话是 BYOK：无 credits、只有真实 token）时，面板与底栏
-// 整体切到 token 口径：真实 token（不加 ≈，不是 billedInput 估算）、无 cr/cr·min 行；
+// 整体切到 token 口径：真实 token（不加估算标记，不是 billedInput 估算）、无 cr/cr·min 行；
 // 'credits'/缺失/乱值 → 现状完全不变（既有断言即回归网）。
 const tokState = () => {
   const st = JSON.parse(JSON.stringify(mock));
@@ -861,7 +1037,7 @@ const tokState = () => {
   const w = { input: 98000, output: 500, cacheRead: 90000, cacheCreate: 0, credits: 0, turns: 3, billedInput: 120000, billedInputSource: 'fallback200k', cacheHitRate: 0.918 };
   L.window5h = { ...w }; L.week = { ...w }; L.today = { ...w };
   L.contextWindow = { value: 200000, source: 'fallback200k' };
-  L.session = { id: 'sess-byok', credits: 0, turns: 3, rateCpm30: 0, billedInput: 120000, avgTurnSec: 91, totalTurnSec: 262, model: 'qoder-custom-f4e/mimo-v2.6-flash', modelName: 'mimo-v2.6-flash', tps30: 66.7, billingMode: 'tokens', input: 98000, output: 500, outEst: 421, outEstThk: 30, outEstTxt: 351, outEstCall: 40, cacheRead: 90000, cacheCreate: 0, outTps30: 55.8, rounds: 3, requests: 5, cacheHitRate: 0.918, firstTs: 1791793000000, lastTs: 1791793816142, tools: { calls: 6, errors: 0, byName: [{ name: 'Read', calls: 6, errors: 0 }] }, edits: { added: 10, removed: 2, files: 2 } }; // outEst：T16 正文估算（「输出」行换它，带 ~）
+  L.session = { id: 'sess-byok', credits: 0, turns: 3, rateCpm30: 0, billedInput: 120000, avgTurnSec: 91, totalTurnSec: 262, model: 'qoder-custom-f4e/mimo-v2.6-flash', modelName: 'mimo-v2.6-flash', tps30: 66.7, billingMode: 'tokens', input: 98000, output: 500, outEst: 421, outEstThk: 30, outEstTxt: 351, outEstCall: 40, cacheRead: 90000, cacheCreate: 0, outTps30: 55.8, rounds: 3, requests: 5, cacheHitRate: 0.918, firstTs: 1791793000000, lastTs: 1791793816142, tools: { calls: 6, errors: 0, byName: [{ name: 'Read', calls: 6, errors: 0 }] }, edits: { added: 10, removed: 2, files: 2 } }; // outEst：T16 正文估算（「输出」行换它，一位小数、无标记）
   L.sessions = [{ id: 'sess-byok', model: 'qoder-custom-f4e/mimo-v2.6-flash', modelName: 'mimo-v2.6-flash', credits: 0, billedInput: 120000, billedSource: 'fallback200k', turns: 3, rounds: 3, requests: 5, lastTs: 1791793816142, avgTurnSec: 91, billingMode: 'tokens', input: 98000, output: 500, cacheRead: 90000, cacheCreate: 0 }];
   // T9：strip v5 迷你槽读 lastTurn（BYOK 真机形态——轮内真实 token、credits null）
   L.lastTurn = {
@@ -879,28 +1055,21 @@ const linesOf = async (id, state, size) => {
   return findAll(def.render({ size, state: syncActive(state), fmt: {} }), 'qum-line').map(textOf);
 };
 
-test('tokens 口径：usage 用量节奏改真实 in/out（无 cr、无 ≈ 估算段）', async () => {
-  const st = tokState();
-  // P2（修订②）：usage half 改读 window5h（今日数字归「token 消耗」，不再重复）
-  assert.deepEqual(await linesOf('usage', st, 'half'), ['近5小时98.0k in / 500 out']);
-  assert.deepEqual(await linesOf('usage', st, 'full'),
-    ['近5小时98.0k in / 500 out', '本周98.0k in / 500 out']);
-  // 回归网：credits 口径（mock 默认）half 同样出「近5小时」行
-  assert.match((await linesOf('usage', mock, 'half'))[0], /^近5小时35 cr · .*in \/ .*out/, 'credits 口径 half 同规出 cr + in/out');
-});
+// v8：usage（用量节奏）已删（与 consumption 重复，用户裁定「删重复」）——原 tokens 口径 usage 用例
+// 随模块一并移除；tokens 口径的波形呈现由 pulse 用例覆盖。
 
 test('tokens 口径：session 本会话 half/full 改真实 token 三明细 + 生成速度（outTps30；无 cr、无 cr/min；P2 删平均回合行）', async () => {
   const st = tokState();
   assert.deepEqual(await linesOf('session', st, 'half'), ['本会98.0k tok']);
   assert.deepEqual(await linesOf('session', st, 'full'), [
-    '本会话98.0k tok · 3 轮 · 5 次', '生成速度~55.8 tps',
-    '输入未命中8.0k tok', '缓存命中90.0k tok', '输出~421 tok', '会话sess-byo', // 未命中 = input − cacheRead（缓存是 input 的子集）
+    '本会话98.0k tok · 3 轮 · 5 次', '生成速度55.8 tps',
+    '输入未命中8.0k tok', '缓存命中90.0k tok', '输出421 tok', '会话sess-byo', // 未命中 = input − cacheRead（缓存是 input 的子集）
     '模型mimo-v2.6-flash (byok)', // T8：mock 目录新增 mimo-v2.6-flash（byok:true）→ 后缀标注
   ]);
   assert.match((await linesOf('session', mock, 'half'))[0], /cr$/);
 });
 
-test('T16 真值优先：outTok/outExact/outTps30Exact=true 时输出与速度不再带 ~（BYOK 真实 output_tokens）', async () => {
+test('T16 真值优先：outTok/outExact/outTps30Exact=true 时输出与速度不加估算标记（BYOK 真实 output_tokens）', async () => {
   const st = tokState();
   const s = st.local.session;
   s.outTok = 500;           // 真实 output_tokens 合计（outEst 421 是估算，被真值覆盖）
@@ -913,21 +1082,21 @@ test('T16 真值优先：outTok/outExact/outTps30Exact=true 时输出与速度�
     turns: 1, outTps: 12.3, outTpsExact: true, avgTurnSec: 10,
   }];
   const rows = await linesOf('session', st, 'full');
-  assert.ok(rows.includes('输出500 tok'), '真值输出无 ~');
-  assert.ok(rows.includes('生成速度55.8 tps'), '真值速率无 ~');
-  assert.ok(rows.some((r) => r.includes('12.3 tps') && !r.includes('~12.3')), 'byModel 真值速率无 ~');
-  // 混合/估算 → 仍带 ~（outExact=false）
+  assert.ok(rows.includes('输出500 tok'), '真值输出无估算标记');
+  assert.ok(rows.includes('生成速度55.8 tps'), '真值速率无估算标记');
+  assert.ok(rows.some((r) => r.includes('12.3 tps')), 'byModel 真值速率已格式化');
+  // 混合/估算 → 同样不加标记（outExact=false）
   s.outExact = false;
   s.outTps30Exact = false;
-  assert.ok((await linesOf('session', st, 'full')).includes('输出~500 tok'));
+  assert.ok((await linesOf('session', st, 'full')).includes('输出500 tok'));
   const { getModules } = await import('../app/widget.js');
   const def = getModules().find((m) => m.id === 'speed');
-  assert.equal(textOf(def.renderMini({ size: 'mini', slot: 'tps', state: syncActive(st), fmt: {} })), '⚡ ~55.8 t/s');
+  assert.equal(textOf(def.renderMini({ size: 'mini', slot: 'tps', state: syncActive(st), fmt: {} })), '⚡ 55.8 t/s');
   s.outTps30Exact = true;
   assert.equal(textOf(def.renderMini({ size: 'mini', slot: 'tps', state: syncActive(st), fmt: {} })), '⚡ 55.8 t/s');
 });
 
-test('tokens 口径：consumption 今日行去 cr、tokens 迷你槽读 lastTurn 真实计费输入总量（无 ≈）、credits 槽 -- cr；session 簇切真实 token', async () => {
+test('tokens 口径：consumption 今日行去 cr、tokens 迷你槽读 lastTurn 真实计费输入总量（无估算标记）、credits 槽 -- cr；session 簇切真实 token', async () => {
   const st = tokState();
   assert.deepEqual(await linesOf('consumption', st, 'half'), ['今日98.0k in / 500 out']);
   assert.deepEqual(await linesOf('consumption', st, 'full'),
@@ -937,27 +1106,27 @@ test('tokens 口径：consumption 今日行去 cr、tokens 迷你槽读 lastTurn
   // v7：tokens 槽仍是末轮真实总量（input 已含缓存 = 104,000）；credits 槽在 tokens 口径不适用
   assert.equal(textOf(def.renderMini({ size: 'mini', slot: 'tokens', state: syncActive(st), fmt: {} })), '104,000 tok');
   assert.equal(textOf(def.renderMini({ size: 'mini', slot: 'credits', state: syncActive(st), fmt: {} })), '-- cr');
-  // v7：session 会话簇在 tokens 口径用真实总量（input 已含缓存 = 98,000 → 9.8万），无 ≈
+  // v7：session 会话簇在 tokens 口径用真实总量（input 已含缓存 = 98,000 → 9.8万），无估算标记
   const sdef = getModules().find((m) => m.id === 'session');
   assert.equal(textOf(sdef.renderMini({ size: 'mini', slot: 'session', state: syncActive(st), fmt: {} })),
     '9.8万 tok · 91.8% 命中 · 3 轮 · 5 次');
 });
 
-test('tokens 口径：speed 迷你槽与 full 行（P2 行序：最新一轮/平均回合/总耗时/生成速度；无 ≈、无 cr/min 行）', async () => {
+test('tokens 口径：speed 迷你槽与 full 行（P2 行序：最新一轮/平均回合/总耗时/生成速度；无估算标记、无 cr/min 行）', async () => {
   const st = tokState();
   const { getModules } = await import('../app/widget.js');
   const def = getModules().find((m) => m.id === 'speed');
   // v7：tps 槽 = 会话 outTps30（55.8）；turnsec 槽 = 末轮 turnSec（45.6）
-  assert.equal(textOf(def.renderMini({ size: 'mini', slot: 'tps', state: syncActive(st), fmt: {} })), '⚡ ~55.8 t/s');
+  assert.equal(textOf(def.renderMini({ size: 'mini', slot: 'tps', state: syncActive(st), fmt: {} })), '⚡ 55.8 t/s');
   assert.equal(textOf(def.renderMini({ size: 'mini', slot: 'turnsec', state: syncActive(st), fmt: {} })), '45.6 s');
   const rows = await linesOf('speed', st, 'full');
-  assert.deepEqual(rows, ['最新一轮45.6 s', '平均回合91 s', '总耗时4m', '生成速度~55.8 tps · 近30分钟']);
+  assert.deepEqual(rows, ['最新一轮45.6 s', '平均回合91 s', '总耗时4m', '生成速度55.8 tps · 近30分钟']);
   assert.doesNotMatch(rows.join('|'), /cr/, 'tokens 口径无 cr/min 行');
   // credits 口径 mini 读 mock.session.outTps30 45.6（不再是末轮 56.5）
-  assert.equal(textOf(def.renderMini({ size: 'mini', slot: 'tps', state: syncActive(mock), fmt: {} })), '⚡ ~45.6 t/s');
+  assert.equal(textOf(def.renderMini({ size: 'mini', slot: 'tps', state: syncActive(mock), fmt: {} })), '⚡ 45.6 t/s');
 });
 
-test('tokens 口径：sessions 会话明细行按行自身口径出 tok（无 cr、无 ≈）；混排行各用各自口径', async () => {
+test('tokens 口径：sessions 会话明细行按行自身口径出 tok（无 cr、无估算标记）；混排行各用各自口径', async () => {
   const st = tokState();
   assert.deepEqual(await linesOf('sessions', st, 'full'),
     ['sess-byo · 98.0k tok · 3 轮 · 5 次 · mimo-v2.6-flash']);
@@ -965,7 +1134,7 @@ test('tokens 口径：sessions 会话明细行按行自身口径出 tok（无 cr
   st.local.sessions.push({ id: 'sess-cr', model: 'qfmodel', modelName: null, credits: 12.4, billedInput: 90000, billedSource: 'runtime-config', turns: 2, rounds: 2, requests: 4, lastTs: 1, avgTurnSec: null, billingMode: 'credits', input: 0, output: 0, cacheRead: 0, cacheCreate: 0 });
   assert.deepEqual(await linesOf('sessions', st, 'full'), [
     'sess-byo · 98.0k tok · 3 轮 · 5 次 · mimo-v2.6-flash',
-    'sess-cr · 12 cr · 90.0k tok · 2 轮 · 4 次 · qfmodel',
+    'sess-cr · 12.4 cr · 90.0k tok · 2 轮 · 4 次 · qfmodel',
   ]);
 });
 
@@ -975,8 +1144,8 @@ test('session byModel 表（P2）：模型行后每模型一行（同会话明�
   const def = getModules().find((m) => m.id === 'session');
   const rows = findAll(def.render({ size: 'full', state: syncActive(mock), fmt: {} }), 'qum-line').map(textOf);
   assert.deepEqual(rows.slice(5), [
-    'qfmodel · 0.6 cr · ≈48.1k tok · ~56.5 tps · 66s · 3 轮', // fallback200k → ≈；0.6→'0.6'；T16 估算速率带 ~
-    'Mimo-V2.6 (byok) · -- cr · 104.0k tok · ~46 tps · 41s · 1 轮', // tokens 口径：cr 段 -- cr、tok 段真实总量
+    'qfmodel · 0.6 cr · 48.1k tok · 56.5 tps · 66s · 3 轮', // fallback200k；0.6→'0.6'；T16 估算速率、一位小数、无标记
+    'Mimo-V2.6 (byok) · -- cr · 104.0k tok · 46 tps · 41s · 1 轮', // tokens 口径：cr 段 -- cr、tok 段真实总量
   ]);
   // byModel 空 → 「暂无模型明细」（qum-note，不入行集）；旧 daemon（无字段）→ 同处理
   const empty = { ...mock, local: { ...mock.local, session: { ...mock.local.session, byModel: [] } } };
@@ -985,7 +1154,7 @@ test('session byModel 表（P2）：模型行后每模型一行（同会话明�
   assert.match(textOf(def.render({ size: 'full', state: syncActive(old), fmt: {} })), /暂无模型明细/);
   assert.equal(findAll(def.render({ size: 'full', state: syncActive(old), fmt: {} }), 'qum-line').length, 5, '旧会话仍出基础五行 + note 不算行（P2：本会话/近30分钟/计费输入/会话/模型）');
   // half 宽度紧：不追加 byModel 行
-  assert.deepEqual(findAll(def.render({ size: 'half', state: syncActive(mock), fmt: {} }), 'qum-line').map(textOf), ['本会123 cr']);
+  assert.deepEqual(findAll(def.render({ size: 'half', state: syncActive(mock), fmt: {} }), 'qum-line').map(textOf), ['本会123.4 cr']);
 });
 
 test('sessions 手风琴（P2）：整行点击展开 byModel 明细、互斥开新收旧、按 id 记忆（重渲染保持）、无 byModel 不可展开、滑出自然丢弃', async () => {
@@ -999,14 +1168,14 @@ test('sessions 手风琴（P2）：整行点击展开 byModel 明细、互斥开
   // 展开 abc123（byModel 两行）
   findAll(el, 'qum-session-item')[0].fire('click');
   assert.deepEqual(findAll(el, 'qum-session-detail').map(textOf), [
-    'qfmodel · 0.6 cr · ≈48.1k tok · ~56.5 tps · 66s · 3 轮Mimo-V2.6 (byok) · -- cr · 104.0k tok · ~46 tps · 41s · 1 轮',
+    'qfmodel · 0.6 cr · 48.1k tok · 56.5 tps · 66s · 3 轮Mimo-V2.6 (byok) · -- cr · 104.0k tok · 46 tps · 41s · 1 轮',
   ]);
   assert.deepEqual(findAll(el, 'qum-session-caret').map(textOf), ['▾', '▸']);
   // 互斥：展开 def456 → abc123 自动收起（同时只展开一个）
   findAll(el, 'qum-session-item')[1].fire('click');
   assert.deepEqual(findAll(el, 'qum-session-caret').map(textOf), ['▸', '▾']);
   assert.equal(findAll(el, 'qum-session-detail').length, 1);
-  assert.match(textOf(findAll(el, 'qum-session-detail')[0]), /^qfmodel · 88 cr · 96\.0k tok · ~44 tps · 62s · 30 轮$/);
+  assert.match(textOf(findAll(el, 'qum-session-detail')[0]), /^qfmodel · 88.2 cr · 96\.0k tok · 44 tps · 62s · 30 轮$/);
   // 不可展开行点击无响应（无 listener）
   findAll(el, 'qum-session-item')[2].fire('click');
   assert.equal(findAll(el, 'qum-session-detail').length, 1);
@@ -1047,10 +1216,10 @@ test('models 按模型消耗（修订④）：默认 7 日序卡片五列值 + b
     ['DeepSeek-Flash (byok)', 'Qwen3.8-27B', 'GLM-5.3', 'Kimi K3', 'Mimo-V2.6 (byok)']);
   // 五列值（照图：今日/近7日/Tokens/时延/占比；Mimo 无 cr 上报 → -）
   assert.deepEqual(cards.map((c) => findAll(c, 'qum-models-value').map(textOf)), [
-    ['29 cr', '912 cr', '60.4M', '63s/回合', '83%'],
-    ['6 cr', '128 cr', '8.6M', '71s/回合', '12%'],
-    ['3 cr', '43 cr', '3.9M', '88s/回合', '4%'],
-    ['1 cr', '15 cr', '3.4M', '74s/回合', '1%'],
+    ['29 cr', '912 cr', '60.4M', '63s/回合', '83.1%'],
+    ['6 cr', '128 cr', '8.6M', '71s/回合', '11.7%'],
+    ['3 cr', '43 cr', '3.9M', '88s/回合', '3.9%'],
+    ['1 cr', '15 cr', '3.4M', '74s/回合', '1.4%'],
     ['-', '-', '1.3M', '41s/回合', '-'],
   ]);
   // 左缘彩条：按显示位次循环（第 5 行回绕蓝）；条色同左缘
@@ -1193,17 +1362,17 @@ test('P3 T8: active 与全局分歧时，底栏槽/本会话/吞吐时长出 act
   assert.equal(findAll(root.children[0], 'qum-slot').filter((n) => n.dataset.slot === 'model').length, 0, '不再有模型槽');
   assert.equal(val('credits'), '33.5 cr', 'credits 槽出 active 会话累计');
   assert.equal(val('turnsec'), '7.5 s', '耗时槽出 active 末轮 turnSec');
-  assert.equal(val('tps'), '⚡ ~8.8 t/s', '速率槽出 active 会话 outTps30（T16 估算带 ~）');
-  assert.equal(val('session'), '≈12万 tok · 50% 命中 · 9 轮 · 20 次', '会话簇出 active 会话（不是全局 12.8万/23 轮）');
+  assert.equal(val('tps'), '⚡ 8.8 t/s', '速率槽出 active 会话 outTps30（T16 估算，一位小数、无标记）');
+  assert.equal(val('session'), '12万 tok · 50% 命中 · 9 轮 · 20 次', '会话簇出 active 会话（不是全局 12.8万/23 轮）');
   assert.equal(val('tools'), '工具 4 · 失败 0', '工具槽出 active 会话');
   const sessCell = textOf(root.children[1].children.find((c) => c.dataset.module === 'session'));
-  assert.match(sessCell, /本会话34 cr · 9 轮 · 20 次/, '本会话模块读 active.session（33.5 → fmtCredits 整数呈现 34）');
+  assert.match(sessCell, /本会话33.5 cr · 9 轮 · 20 次/, '本会话模块读 active.session（33.5 → fmtCredits 一位小数）');
   assert.match(sessCell, /会话S-y/, '会话 id 行也是 active 的（不是全局 abc123）');
   assert.doesNotMatch(sessCell, /未取到当前会话/, '有 active 时不出硬暴露说明');
   const speedCell = textOf(root.children[1].children.find((c) => c.dataset.module === 'speed'));
   assert.match(speedCell, /最新一轮7\.5 s/, '吞吐/时长读 active.lastTurn.turnSec');
   assert.match(speedCell, /总耗时6m/, '吞吐/时长读 active.session.totalTurnSec（360s → 6m）');
-  assert.match(speedCell, /生成速度~8\.8 tps/, '吞吐/时长读 active.session.outTps30（8.8 → fmtNum 一位小数，T16 估算带 ~）');
+  assert.match(speedCell, /生成速度8\.8 tps/, '吞吐/时长读 active.session.outTps30（8.8 → fmtNum 一位小数，T16 估算、无标记）');
 });
 
 test('P3 T8 回退（真机结论）: active 缺席 → 六槽出全局值、无结构告警（DOM 在嵌套文档里拿不到会话）', async () => {
@@ -1280,18 +1449,16 @@ test('§2 实扣 0 / 名义 >0 → 底栏/本会话/近30分钟/窗口/会话行
     const col = findAll(root.children[0], 'qum-slot').find((n) => n.dataset.slot === slot);
     return textOf(findAll(col, 'qum-slot-value')[0]);
   };
-  assert.equal(val('credits'), '0/79.68 cr', '底栏 credits 槽：实扣 0 并列名义（两位小数）');
+  assert.equal(val('credits'), '0/79.7 cr', '底栏 credits 槽：实扣 0 并列名义（两位小数）');
   const sessCell = root.children[1].children.find((c) => c.dataset.module === 'session');
   const sessText = textOf(sessCell);
-  assert.match(sessText, /本会话0\/80 cr · 23 轮 · 187 次/, '面板主数字 0/名义（fmtCredits 整数）');
+  assert.match(sessText, /本会话0\/79\.7 cr · 23 轮 · 187 次/, '面板主数字 0/名义（一位小数）');
   assert.match(sessText, /近30分钟0\/1\.2 cr\/min/, '近30分钟速率同样并列');
   assert.match(sessText, /0\/8\.4 cr/, 'byModel 行同样并列');
   const lines = findAll(sessCell, 'qum-line');
-  assert.equal(lines[0].title, '实扣 0 cr · 名义 80 cr · 未扣减 80 cr', 'tooltip 三口径不变');
-  const usageCell = textOf(root.children[1].children.find((c) => c.dataset.module === 'usage'));
-  assert.match(usageCell, /近5小时0\/58 cr/, '窗口行并列名义（57.98 → 58）');
+  assert.equal(lines[0].title, '实扣 0 cr · 名义 79.7 cr · 未扣减 79.7 cr', 'tooltip 三口径不变');
   const sessionsCell = textOf(root.children[1].children.find((c) => c.dataset.module === 'sessions'));
-  assert.match(sessionsCell, /0\/134 cr/, '会话明细行并列名义（133.66 → 134）');
+  assert.match(sessionsCell, /0\/133\.7 cr/, '会话明细行并列名义（133.66 → 133.7）');
   const modelsCell = textOf(root.children[1].children.find((c) => c.dataset.module === 'models'));
   assert.match(modelsCell, /0\/29 cr/, '模型卡今日并列名义（真实字段名 creditsToday）');
   assert.match(modelsCell, /0\/912 cr/, '模型卡近7日并列名义');
@@ -1322,4 +1489,22 @@ test('P3 T10: sessions 列表中 sessionId === active.sessionId 的行加 .qum-s
   const marked = items.filter((n) => n.classList.contains('qum-session-active'));
   assert.equal(marked.length, 1, '恰好一行高亮');
   assert.match(textOf(marked[0]), new RegExp(String(target).slice(0, 8)), '高亮的正是当前会话那一行');
+});
+
+// 2026-10-29 用户裁定：展示层不再出现估算符号（≈ / ~），指标最多一位小数。
+test('展示层：所有模块 full/half 与迷你槽均不含 ≈ / ~ 估算标记，数值最多一位小数', async () => {
+  const { getModules } = await import('../app/widget.js');
+  const st = syncActive(mock);
+  for (const m of getModules()) {
+    for (const size of m.supports) {
+      const t = textOf(m.render({ size, state: st, fmt: {} }));
+      assert.doesNotMatch(t, /[≈~]/, `${m.id}/${size} 不应出现估算标记`);
+      assert.doesNotMatch(t, /\d\.\d{2,}/, `${m.id}/${size} 数值最多一位小数`);
+    }
+    for (const slot of m.slotIds || []) {
+      const t = textOf(m.renderMini({ size: 'mini', slot, state: st, fmt: {} }));
+      assert.doesNotMatch(t, /[≈~]/, `${m.id}/${slot} 不应出现估算标记`);
+      assert.doesNotMatch(t, /\d\.\d{2,}/, `${m.id}/${slot} 数值最多一位小数`);
+    }
+  }
 });

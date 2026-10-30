@@ -66,14 +66,18 @@
   filter: grayscale(1);        /* daemon 不可达：灰显（轮询失败时由 widget.js 置属性） */
 }
 
-/* Strip v6 单行式槽列：仅数值（标签行已删），水平居中；左对齐。 */
+/* Strip v6 单行式槽列：仅数值（标签行已删），水平居中；左对齐。
+ * 2026-10-29：短槽列固定内容宽，只有长会话簇可收缩省略——否则长会话簇会把尾部
+ * 「分析」时刻列挤出 overflow:hidden 的可视区；也让短槽的数值/单位不被截断。 */
 .qum-slot {
   display: flex;
   flex-direction: row;
   align-items: center;
   justify-content: center;
-  padding: 3px 10px;
+  padding: 3px 8px;
   white-space: nowrap;
+  min-width: 0;
+  flex-shrink: 0;
 }
 
 .qum-slot + .qum-slot {
@@ -84,6 +88,9 @@
   font-size: 14px;
   font-weight: 600;
   line-height: 1.1;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* v7（2026-10-26 用户裁定：对齐客户端原生底栏）：会话簇是底栏主信息，用强调色；
@@ -96,6 +103,10 @@
   color: var(--qum-accent);
   font-weight: 600;
 }
+
+/* 空间不足时只收缩会话簇（省略号），其余短槽保持完整（数值+单位）。
+ * 短槽即使只缩 1px 也会触发 ellipsis，把「失败 3」之类尾巴换掉，因此一律 flex-shrink:0。 */
+.qum-slot-session { flex-shrink: 100; }
 
 /* v7 悬停摘要卡：折叠态悬停 strip 时向上覆盖显示（原生同款）；pointer-events:none
  * 保证卡本身不抢鼠标（移出 strip 即收起，不挡宿主交互）。展开面板时由 JS 收起。 */
@@ -164,6 +175,7 @@
   text-align: right;
   white-space: nowrap;
   opacity: 0.75;
+  flex-shrink: 0;              /* 2026-10-29：时刻列不参与收缩，任何宽度都完整显示 */
 }
 
 .qum-analysis-value {
@@ -330,3 +342,107 @@
 .qum-models-track { height: 6px; border-radius: 3px; overflow: hidden; margin-top: 8px; background: var(--qum-track); }
 .qum-models-bar { height: 100%; border-radius: 3px; }
 .qum-models-lit { display: block; height: 100%; border-radius: 3px 0 0 3px; background: rgba(255, 255, 255, 0.55); }
+
+/* v8 面板两张全宽新卡（2026-10-30 用户裁定，批准静态预览 2026-10-29）：
+ * pulse 用量波形（三页签/统计/SVG 波形/起止轴/脚注）与 turnspeed 逐轮生成速度
+ * （每模型一行：轮数·平均·区间 + 每轮柱 + 平均虚线）。两者均 panel 专有、无 strip 槽。 */
+.qum-pulse-tool { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 1px 0 7px; }
+.qum-pulse-tabs { display: flex; gap: 4px; }
+.qum-pulse-tab {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 9px;
+  border: 1px solid var(--qum-border);
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--qum-muted);
+  cursor: pointer;
+  user-select: none;
+}
+.qum-pulse-tab.on {
+  color: var(--qum-accent);
+  border-color: color-mix(in srgb, var(--qum-accent) 38%, transparent);
+  background: color-mix(in srgb, var(--qum-accent) 12%, transparent);
+  font-weight: 600;
+}
+.qum-pulse-chip, .qum-tps-chip {
+  font-size: 11px;
+  color: var(--qum-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.qum-pulse-stats { display: flex; gap: 30px; margin: 7px 0 2px; }
+.qum-pulse-stat-label { font-size: 10.5px; color: var(--qum-muted); }
+.qum-pulse-stat-value { font-size: 16px; font-weight: 600; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.qum-pulse-wave { width: 100%; height: 96px; display: block; margin-top: 6px; }
+/* SVG 内部分色全走 CSS 变量（浅/深色主题自动跟随）；面积渐变 id 固定在模块内唯一。 */
+.qum-pulse-area { fill: url(#qum-pulse-grad); }
+.qum-pulse-line {
+  fill: none;
+  stroke: var(--qum-accent);
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.qum-pulse-grid { stroke: var(--qum-track); stroke-width: 1; stroke-dasharray: 2 3; opacity: 0.85; }
+.qum-pulse-base { stroke: var(--qum-track); stroke-width: 1; }
+.qum-pulse-peak { fill: var(--qum-accent); stroke: var(--qum-bg); stroke-width: 1.4; }
+.qum-pulse-stop-a { stop-color: var(--qum-accent); stop-opacity: 0.3; }
+.qum-pulse-stop-b { stop-color: var(--qum-accent); stop-opacity: 0.015; }
+.qum-pulse-axis {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10.5px;
+  color: var(--qum-muted);
+  margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+.qum-pulse-foot, .qum-tps-foot { margin-top: 6px; font-size: 10.5px; color: var(--qum-muted); }
+.qum-tps-row { margin-top: 7px; }
+.qum-tps-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; font-size: 11.5px; }
+.qum-tps-gap { display: none; } /* 纯文本分隔节点（避免名称与轮数被读成一个数字），不占布局 */
+.qum-tps-name { font-weight: 600; }
+.qum-tps-meta { color: var(--qum-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.qum-tps-bars {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  gap: 1px;
+  height: 26px;
+  margin-top: 3px;
+  border-bottom: 1px solid var(--qum-track);
+}
+.qum-tps-bar {
+  flex: 1 1 0;
+  min-width: 1px;
+  min-height: 2px;
+  border-radius: 1px 1px 0 0;
+  background: color-mix(in srgb, var(--qum-accent) 62%, transparent);
+  cursor: pointer; /* v8.1：柱可点选查看该轮精确 tps */
+  user-select: none;
+}
+.qum-tps-bar.p { background: var(--qum-accent); }
+.qum-tps-bar.on { /* 选中柱：亮色 + 外圈，和「峰值柱」仍可区分 */
+  background: var(--qum-accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--qum-accent) 75%, transparent),
+    0 0 6px color-mix(in srgb, var(--qum-accent) 35%, transparent);
+}
+.qum-tps-bar:focus-visible { outline: 1px solid var(--qum-accent); outline-offset: 1px; }
+.qum-tps-pick {
+  margin-top: 3px;
+  padding-left: 7px;
+  border-left: 2px solid var(--qum-accent);
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--qum-text);
+  font-variant-numeric: tabular-nums;
+}
+.qum-tps-mean {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-top: 1px dashed color-mix(in srgb, var(--qum-accent) 60%, transparent);
+  pointer-events: none; /* 虚线不挡柱子的点击/键盘焦点 */
+}

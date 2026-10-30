@@ -14,7 +14,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { parseJsonObject, runtimeConfigOf, aggregate, dailyRows, sessionStats, sessionsSummary, lastTurnOf, byModelWindowOf, lastTurnOfSession, sessionStatsFor, FALLBACK_CONTEXT_WINDOW } from './scanner.mjs';
+import { parseJsonObject, runtimeConfigOf, aggregate, dailyRows, sessionStats, sessionsSummary, lastTurnOf, byModelWindowOf, lastTurnOfSession, sessionStatsFor, pulseOf, turnSpeedsOf, FALLBACK_CONTEXT_WINDOW } from './scanner.mjs';
 import { estBreakdownOfContent, parseTimingLine } from './est.mjs';
 import { pickQuotaFields, pickHeatmap, pickMetrics, resolveModelName, trimModelCatalog } from './quotaPick.mjs';
 import {
@@ -556,6 +556,9 @@ class Daemon {
         a.session = { ...a.session, modelName: resolveModelName(a.session.model, entries) };
         if (Array.isArray(a.session.byModel)) a.session = { ...a.session, byModel: resolveByModelRows(a.session.byModel) };
       }
+      if (a.turnSpeeds && typeof a.turnSpeeds === 'object' && Array.isArray(a.turnSpeeds.rows)) {
+        a.turnSpeeds = { ...a.turnSpeeds, rows: resolveByModelRows(a.turnSpeeds.rows) };
+      }
       next.active = a;
     }
     // 计费口径（用户裁定"只跟随当前会话口径"）：当前会话记录的 billingMode 即全局呈现口径；
@@ -655,7 +658,12 @@ export function buildActive(pool, sessionId, now, entries) {
     if (Array.isArray(o.byModel)) next.byModel = o.byModel.map((r) => ({ ...r, modelName: name(r.model) }));
     return next;
   };
-  return { sessionId, lastTurn: withNames(lastTurn), session: withNames(stats) };
+  // 2026-10-30：面板波形 + 逐轮生成速度（请求时算，绝不落盘）。
+  // 会话无记录（stats null）时两者同为空态——无会话就没有"本会话"的波形/轮速可谈。
+  const pulse = stats === null ? null : pulseOf(records, sessionId, now);
+  const speeds = stats === null ? null : turnSpeedsOf(records, sessionId);
+  const turnSpeeds = speeds === null ? null : { ...speeds, rows: speeds.rows.map((r) => ({ ...r, modelName: name(r.model) })) };
+  return { sessionId, lastTurn: withNames(lastTurn), session: withNames(stats), pulse, turnSpeeds };
 }
 
 export function emptyState() {

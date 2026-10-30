@@ -166,7 +166,7 @@ test('bootstrap exchanges for token, state aggregates fixture', async ()=>{
   assert.equal(st.local.window5h.billedInput, 140000);
   assert.equal(st.local.window5h.billedInputSource, 'mixed');
   assert.equal(st.local.window5h.byAgent.main.billedInput, undefined);
-  // local.contextWindow（UI ≈ 判定的数据源）：当前会话命中 runtime-config 真值
+  // local.contextWindow（兜底来源的数据面，UI 不显示估算符号）：当前会话命中 runtime-config 真值
   assert.deepEqual(st.local.contextWindow, { value: 180000, source: 'runtime-config' });
   // 会话明细（sessionsSummary）：≤10、lastTs 降序；sess-cur（f1）在前、sess-prev（f2/f3）随后。
   assert.deepEqual(st.local.sessions.map((s) => s.id), ['sess-cur', 'sess-prev']);
@@ -511,7 +511,7 @@ test('P3 T3 buildActive: 无 sid → null（不加字段）；未知 sid → 两
   assert.equal(buildActive(pool, '', now, []), null, '空串 sid → null（调用方不加 local.active 字段）');
   assert.equal(buildActive(pool, null, now, []), null);
   const miss = buildActive(pool, 'S-zzz', now, []);
-  assert.deepEqual(miss, { sessionId: 'S-zzz', lastTurn: null, session: null }, '未知会话 → 空态（非 null）');
+  assert.deepEqual(miss, { sessionId: 'S-zzz', lastTurn: null, session: null, pulse: null, turnSpeeds: null }, '未知会话 → 空态（非 null）');
   const entries = [{ modelKey: 'qfmodel', modelDisplayName: 'Qoder Flash', typeDisplayName: 'Chat', byok: false }];
   const hit = buildActive(pool, 'S-a', now, entries);
   assert.equal(hit.sessionId, 'S-a');
@@ -523,7 +523,14 @@ test('P3 T3 buildActive: 无 sid → null（不加字段）；未知 sid → 两
   assert.equal(hit.session.tools.calls, 1, 'pool.toolEvents → 请求态工具统计');
   assert.equal(hit.session.tools.errors, 1);
   assert.equal(hit.session.edits, null, '无编辑类工具 → null（呈现 --）');
-  assert.deepEqual(buildActive(null, 'S-a', now, []), { sessionId: 'S-a', lastTurn: null, session: null },
+  // 2026-10-30：波形 + 逐轮速度（请求时算，仅供面板；形状与 scanner 纯函数一致）
+  assert.equal(hit.pulse.h1.n, 60);
+  assert.equal(hit.pulse.h24.n, 48);
+  assert.deepEqual([hit.pulse.all.rows, hit.pulse.all.total], [1, 1.5]);
+  assert.deepEqual([hit.turnSpeeds.totalTurns, hit.turnSpeeds.timedTurns], [1, 0], '记录无 mt0/mt1 → 无实测秒，轮不可测');
+  assert.deepEqual(hit.turnSpeeds.rows.map((r) => [r.model, r.modelName, r.turns, r.timed]),
+    [['qfmodel', 'Qoder Flash', 1, 0]], 'turnSpeeds 行同样解析 modelName');
+  assert.deepEqual(buildActive(null, 'S-a', now, []), { sessionId: 'S-a', lastTurn: null, session: null, pulse: null, turnSpeeds: null },
     '池缺席（首轮 scan 前）→ 出空态而非抛错；不是"未提供身份"的 null（那会让 widget 误报结构变更）');
   const loose = buildActive({ records, ctxMeta: pool.ctxMeta }, 'S-a', now, 'not-an-array');
   assert.equal(loose.sessionId, 'S-a');
@@ -544,6 +551,9 @@ test('P3 T4 /state?session=: 带参出 local.active、不带参无该键、未�
   assert.equal(hit.local.active.session.id, sid);
   assert.equal(hit.local.active.lastTurn.credits, plain.local.lastTurn.credits, '锚定会话的 active ≡ 全局 lastTurn');
   assert.equal(hit.local.active.session.turns, plain.local.session.turns, 'active.session ≡ 全局 session（同会话）');
+  // 2026-10-30：请求态携带波形与逐轮速度（不落盘；供面板两新模块读取）
+  assert.ok(hit.local.active.pulse && hit.local.active.pulse.all.rows > 0, '带参响应含脉冲波形');
+  assert.ok(Array.isArray(hit.local.active.turnSpeeds.rows), '带参响应含逐轮速度行');
   // 原生样式数据面：active.session 与全局同源（请求态透传 toolEvents/规模/编辑）
   const as = hit.local.active.session;
   assert.equal(as.rounds, 1);
@@ -554,7 +564,7 @@ test('P3 T4 /state?session=: 带参出 local.active、不带参无该键、未�
   assert.ok(as.firstTs <= as.lastTs, '会话时间范围有序');
   assert.deepEqual([as.outEstThk, as.outEstTxt, as.outEstCall], [0, 7, 0], '思考/正文/工具三段拆分经 active 透传');
   const miss = await getRaw('&session=S-not-exist');
-  assert.deepEqual(miss.local.active, { sessionId: 'S-not-exist', lastTurn: null, session: null });
+  assert.deepEqual(miss.local.active, { sessionId: 'S-not-exist', lastTurn: null, session: null, pulse: null, turnSpeeds: null });
   const disk = JSON.parse(fs.readFileSync(path.join(env.QUM_HOME, 'state.json'), 'utf8'));
   assert.equal('active' in disk.local, false, '请求态绝不落盘（多窗口互不污染）');
   assert.equal(plain.local.billingMode, hit.local.billingMode, '全局口径字段不因带参改变');

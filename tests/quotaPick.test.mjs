@@ -121,23 +121,30 @@ test('T12 expiresAt 窗口：delta ∈ (0,90d) 才认（ms 原样）；秒制先
   assert.equal(pickQuotaFields({ usage: { qoderUsage: { expiresAt: 253402214400000 }, next_refresh_date: 1791691200000 } }, now).nextRefresh, 1791691200000);
 });
 
-test('T12 付费变体：userQuota.total>0 → planRem 取 userQuota；dedicatedResourcePackages+orgResourcePackage → packs 计数', () => {
+test('T12 付费变体：userQuota.total>0 → planRem 取 userQuota；dedicatedResourcePackages+orgResourcePackage → packs 计数；2026-10-30 包名保留（套餐聚合呈现用）', () => {
   const out = pickQuotaFields(realBody({
     qoderUsage: {
       userQuota: { total: 3000, used: 900, remaining: 2100, percentage: 30, unit: 'credits' },
       dedicatedResourcePackages: [
-        { total: 500, used: 100, remaining: 400 },
-        { quota_summary: { used_value: 20, remaining_value: 48, total_value: 68 } },
+        { name: 'Qwen 专属积分', total: 500, used: 100, remaining: 400 },
+        { name: '  次要包  ', quota_summary: { used_value: 20, remaining_value: 48, total_value: 68 } },
+        { total: 30, used: 10, remaining: 20 },
       ],
       orgResourcePackage: { total: 900, used: 300, remaining: 600 },
     },
   }));
   assert.equal(out.planRem, 2100);
   assert.equal(out.packRem, 450); // 加油包剩余仍为 packRem 头（与 gauge 同源，packs 只作计数面）
-  assert.equal(out.packs.length, 3); // 2 dedicated + 1 org
+  assert.equal(out.packs.length, 4); // 3 dedicated + 1 org
   assert.equal(out.packs[0].remaining, 400);
   assert.equal(out.packs[1].remaining, 48);
-  assert.equal(out.packs[2].total, 900);
+  assert.equal(out.packs[2].total, 30);
+  assert.equal(out.packs[3].total, 900);
+  // 2026-10-30 用户反馈：套餐用户的专属资源包必须可按名字拆解呈现 → normPack 保留 name
+  assert.equal(out.packs[0].name, 'Qwen 专属积分');
+  assert.equal(out.packs[1].name, '次要包', 'name 去首尾空白');
+  assert.equal(out.packs[2].name, null, '无 name → null（呈现层回落「专属资源包」）');
+  assert.equal(out.packs[3].name, null, 'orgResourcePackage 无 name → null');
 });
 
 test('T12 真机 HEAD 优先于旧候选：qoderUsage 与 credit-watch 键并存时取前者，旧链仅在缺席时兜底', () => {

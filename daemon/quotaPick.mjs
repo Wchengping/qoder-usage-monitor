@@ -79,7 +79,12 @@ function blockRemain(block) {
   return null;
 }
 
-/** 配额块 → {used,remaining,total,expiringSoon} 归一（各值可 null）；全 null 的废块 → null。 */
+/**
+ * 配额块 → {name,used,remaining,total,expiringSoon} 归一（各值可 null）；全 null 的废块 → null。
+ * name（2026-10-30）：dedicatedResourcePackages 条目的 name 是真机唯一可辨识标签（如
+ * 「Qwen 专属积分」），聚合分母需要它做分项展示。只采信非空字符串（trim 后），其余 → null；
+ * name 不参与"废块"判定（只有名字没数字的块不构成一个可用资源包）。
+ */
 function normPack(block) {
   const b = obj(block);
   if (!b) return null;
@@ -89,7 +94,9 @@ function normPack(block) {
   const remaining = blockRemain(b);
   const expiringSoon = num(b.expiring_soon) ?? num(b.expiringSoon);
   if (used === null && total === null && remaining === null && expiringSoon === null) return null;
-  return { used, remaining, total, expiringSoon };
+  const rawName = typeof b.name === 'string' ? b.name.trim() : '';
+  const name = rawName || null;
+  return { name, used, remaining, total, expiringSoon };
 }
 
 /** 真机 T12：各容器（body → usage → plan）里的 qoderUsage 壳，防御式收集。 */

@@ -70,7 +70,7 @@ test('barPcts: ratio/remain 分数 + 钳位 + 容错 null', () => {
 });
 
 // T12 credits 校准：credits 是本地口径主单位（当前客户端 token 字段全 0、逐回合 credits 真实）。
-test('fmtCredits: <10 一位小数（尾数 .0 省略，0 → "0"）；≥10 四舍五入整数；null/undefined/NaN → --', () => {
+test('fmtCredits: 统一一位小数（尾数 .0 省略，0 → "0"）；null/undefined/NaN → --', () => {
   assert.equal(fmtCredits(null), '--');
   assert.equal(fmtCredits(undefined), '--');
   assert.equal(fmtCredits(NaN), '--');
@@ -79,9 +79,9 @@ test('fmtCredits: <10 一位小数（尾数 .0 省略，0 → "0"）；≥10 四
   assert.equal(fmtCredits(0.8022897630), '0.8'); // 真机单回合值
   assert.equal(fmtCredits(6.54), '6.5');
   assert.equal(fmtCredits(9.96), '10'); // 一位小数舍入到 10.0 → 尾数省略
-  assert.equal(fmtCredits(12.4), '12');
-  assert.equal(fmtCredits(52.6), '53');
-  assert.equal(fmtCredits(1234.5), '1235'); // 无 k 单位：credits 直接整数呈现
+  assert.equal(fmtCredits(12.4), '12.4');
+  assert.equal(fmtCredits(52.6), '52.6');
+  assert.equal(fmtCredits(1234.5), '1234.5'); // 无 k 单位：credits 直接小数呈现
 });
 
 // 计费输入 tokens（ratio×contextWindow 派生真值）呈现：fmtK 风格 + M 档（B 档不需要，200k 窗口
@@ -162,13 +162,13 @@ test('T17 fmtStamp: 完整时刻 YYYY-MM-DD HH:MM:SS（本地，title 提示用�
 
 // v7 原生样式（2026-10-26 用户裁定）：底栏会话簇的 token 用万/亿紧凑单位（中文习惯），
 // 悬停卡再给精确千分位；<1e4 不缩写（'9,999'），非有限数 → '--'。
-test('v7 fmtCompact: 万/亿两位小数裁尾零；<1e4 千分位整数；非数 → --', () => {
+test('v7 fmtCompact: 万/亿一位小数裁尾零；<1e4 千分位整数；非数 → --', () => {
   assert.equal(fmtCompact(128000), '12.8万');
   assert.equal(fmtCompact(120000), '12万');
-  assert.equal(fmtCompact(482130), '48.21万');
+  assert.equal(fmtCompact(482130), '48.2万');
   assert.equal(fmtCompact(10000), '1万');
   assert.equal(fmtCompact(9999), '9,999'); // 万档下沿：不足一万不缩写
-  assert.equal(fmtCompact(123456789), '1.23亿');
+  assert.equal(fmtCompact(123456789), '1.2亿');
   assert.equal(fmtCompact(100000000), '1亿');
   assert.equal(fmtCompact(0), '0');
   assert.equal(fmtCompact(-128000), '-12.8万');

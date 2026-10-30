@@ -109,7 +109,7 @@ test('mock-state.json mirrors the real daemon state.json schema', () => {
     ['active', 'byModelWindow', 'contextWindow', 'history', 'lastTurn', 'modelCatalogMeta', 'session', 'sessions', 'today', 'week', 'window5h']);
   // Session strip：local.session = scanner sessionStats 产出（形状钉死——v7 原生样式新增
   // rounds/requests/cacheHitRate/时间范围/思考三段/工具体/编辑增量；T16 增补
-  // outTok/outExact/outTps30Exact：真值优先输出与估算标记）
+  // outTok/outExact/outTps30Exact：真值优先输出，源数据保留 exact 标记供内部判断，UI 不显示估算符号）
   assert.deepEqual(Object.keys(s.local.session).sort(),
     ['avgTurnSec', 'billedInput', 'byModel', 'cacheHitRate', 'credits', 'creditsBillable', 'creditsFree',
       'edits', 'firstTs', 'id', 'lastTs', 'model', 'modelName', 'outEst', 'outEstCall', 'outEstThk',
@@ -135,7 +135,7 @@ test('mock-state.json mirrors the real daemon state.json schema', () => {
   assert.equal(s.local.session.outEstThk + s.local.session.outEstTxt + s.local.session.outEstCall,
     s.local.session.outEst, '思考/正文/工具三段估算之和 = 纯估算输出');
   assert.equal(s.local.session.outTok, 94); // 真值优先输出（mock 无真实 output → 回落估算）
-  assert.equal(s.local.session.outExact, false, '含估算 → 呈现带 ~');
+  assert.equal(s.local.session.outExact, false, '含估算 → 呈现不加标记');
   assert.equal(s.local.session.outTps30Exact, false);
   // active.session 与全局锚定会话同形（v7 悬停卡/会话簇都读它）
   for (const k of ['rounds', 'requests', 'cacheHitRate', 'tools', 'edits']) {
@@ -175,7 +175,7 @@ test('mock-state.json mirrors the real daemon state.json schema', () => {
   }
   assert.equal(s.local.sessions[0].model, 'qfmodel');
   assert.equal(s.local.sessions[2].billedSource, null); // 无 ratio 会话 → billedSource null
-  // local.contextWindow {value, source}：UI ≈ 判定数据源（runtime-config 真值或 200k 兜底）
+  // local.contextWindow {value, source}：数据面来源标记（UI 不再显示估算符号）
   assert.deepEqual(Object.keys(s.local.contextWindow).sort(), ['source', 'value']);
   assert.equal(s.local.contextWindow.value, 200000);
   assert.ok(['runtime-config', 'fallback200k', 'mixed'].includes(s.local.contextWindow.source));
@@ -238,6 +238,11 @@ test('widget.css carries the mandated structural styles', () => {
   assert.doesNotMatch(css, /\.qum-slot-label\s*\{/, 'v6 无槽标签行样式');
   assert.doesNotMatch(css, /\.qum-analysis-label\s*\{/, 'v6「分析」列单行无标签');
   assert.match(css, /\.qum-slot-value/);
+  // 2026-10-29：尾部「分析」时刻列不得被长会话簇挤出 overflow:hidden 的可视区
+  assert.match(css, /\.qum-slot\s*\{[^}]*min-width:\s*0[^}]*flex-shrink:\s*0/, '短槽保持完整宽度');
+  assert.match(css, /\.qum-slot-session\s*\{[^}]*flex-shrink:\s*100/, '仅会话簇可收缩');
+  assert.match(css, /\.qum-slot-value\s*\{[^}]*text-overflow:\s*ellipsis/, '收缩槽用省略号');
+  assert.match(css, /\.qum-analysis\s*\{[^}]*flex-shrink:\s*0/, '「分析」时刻列不收缩');
   assert.match(css, /border-left:\s*1px solid/, '槽间分隔线');
   assert.match(css, /font-size:\s*12px/);
   assert.match(css, /@media\s*\(prefers-color-scheme:\s*dark\)/);
@@ -948,8 +953,8 @@ test('2026-10-28 悬停卡: activeTracked 无 active → 标题明确未识别�
   assert.match(t1, /未识别当前会话/);
   assert.match(t1, /用量-- cr · -- tok/);
   assert.match(t1, /规模-- 轮 · -- 次 · -- 工具 · -- 失败/);
-  assert.doesNotMatch(t1, /123 cr/, '不得出现全局最新会话的 credits');
-  // ② 实扣 0 / 名义 79.68 → 0/80
+  assert.doesNotMatch(t1, /123\.4 cr/, '不得出现全局最新会话的 credits');
+  // ② 实扣 0 / 名义 79.68 → 0/79.7
   const st2 = JSON.parse(JSON.stringify(MOCK));
   st2.local.active.session = { ...st2.local.active.session, creditsBillable: 0, credits: 79.68 };
   mod.setState(mod.withActiveTracking(st2, true));
@@ -957,7 +962,7 @@ test('2026-10-28 悬停卡: activeTracked 无 active → 标题明确未识别�
   const root2 = mod.mount(f2.host, { baseUrl: '' });
   root2.fire('mouseenter');
   const t2 = deepText(root2.children[2]);
-  assert.match(t2, /用量0\/80 cr · 128\.0k tok/, '实扣 0 并列名义');
+  assert.match(t2, /用量0\/79\.7 cr · 128\.0k tok/, '实扣 0 并列名义');
   // ③ 旧快照（无标记）保持既有回落，标题不变
   mod.setState(st);
   const f3 = makeFakeDom();
@@ -1002,14 +1007,17 @@ test('P3 T6: 无任何 pane → 不带 session 参数（硬暴露由 T9 呈现�
     '未取到身份时不发带参请求（daemon 回 P2 形状 → 呈现层出 --）');
 });
 
-test('P3 T7: mock-state.json 含 local.active（{sessionId,lastTurn,session} 三键，等值于全局锚定会话）', () => {
+test('P3 T7: mock-state.json 含 local.active（{sessionId,lastTurn,session,pulse,turnSpeeds} 五键，等值于全局锚定会话）', () => {
   const s = JSON.parse(read('tests/harness/mock-state.json'));
   assert.equal(typeof s.local.active, 'object', 'active 必须是对象（缺席 = 硬暴露态）');
-  assert.deepEqual(Object.keys(s.local.active).sort(), ['lastTurn', 'session', 'sessionId']);
+  assert.deepEqual(Object.keys(s.local.active).sort(), ['lastTurn', 'pulse', 'session', 'sessionId', 'turnSpeeds']);
   assert.equal(s.local.active.sessionId, s.local.lastTurn.sessionId, 'mock 里 active 即当前锚定会话');
   assert.equal(s.local.active.lastTurn.turnSec, s.local.lastTurn.turnSec);
   assert.equal(s.local.active.session.id, s.local.session.id);
   assert.equal(s.local.active.session.credits, s.local.session.credits);
+  // 2026-10-30：波形与逐轮速度同为请求态字段（daemon buildActive 产出；缺省 null 由 upgrade 前快照容忍）
+  assert.equal(s.local.active.pulse.sessionId, s.local.active.sessionId);
+  assert.equal(s.local.active.turnSpeeds.sessionId, s.local.active.sessionId);
 });
 
 // ---- P3 T9: 底栏三分支（active 有但无末轮 → 空态；active 缺席 → 六列占位；正常 → 六列真值，v7）----
@@ -1058,9 +1066,9 @@ test('v7 悬停摘要卡：折叠态 mouseenter 出「会话累计 · 全部请�
   const t = deepText(hover);
   const sess = MOCK.local.active.session;
   assert.match(t, /会话累计 · 全部请求/);
-  assert.match(t, /输入≈128,000 tok · 命中 86\.1%/, '输入：精确千分位 + 缓存命中率');
-  assert.match(t, /输出~94 tok · 思考 25/, '输出：含思考（三段估算）');
-  assert.match(t, /用量123 cr · 128\.0k tok/, 'credits 与 tokens 两口径并列，绝不折算');
+  assert.match(t, /输入128,000 tok · 命中 86\.1%/, '输入：精确千分位 + 缓存命中率');
+  assert.match(t, /输出94 tok · 思考 25/, '输出：含思考（三段估算）');
+  assert.match(t, /用量123\.4 cr · 128\.0k tok/, 'credits 与 tokens 两口径并列，绝不折算');
   assert.match(t, /规模23 轮 · 187 次 · 42 工具 · 3 失败/, '规模：轮/请求/工具/失败');
   assert.ok(t.includes(fmtStamp(sess.firstTs)) && t.includes(fmtStamp(sess.lastTs)), '时间范围：完整起点/终点时刻');
   assert.match(t, /代码变更\+126 \/ −38 · 7 文件/, '代码变更：+行/−行/文件数');
@@ -1154,16 +1162,19 @@ test('P3 T12 activeDiagnostics: 无 pane → sid null/method null 且计数为 0
   assert.equal(d.panes, 1); assert.equal(d.activeMarked, 1);
 });
 
-// ---- P3 T13（2026-10-28 修订）：祖先链只认白名单会话容器属性 + 值 ∈ 已知会话 id ----
+// ---- P3 T13（2026-10-28 二次修订）：祖先链只认白名单会话容器属性 ----
 // 旧契约「任意 data-*session* 属性命中已知 id 即采信」正是上游反馈 §1 的根因之一：
 // 路由/上次会话指针这类属性会把别的会话 id 塞进来。现只认结构化容器白名单。
-test('P3 T13 resolveActivePane: 祖先链只认白名单容器属性；未知值不误采；无已知 id 不猜', async () => {
+// 2026-10-28 用户反馈 §2：结构性容器（值 = sessionId）**不依赖**已知集合——新建会话在
+// daemon 首次扫描/发布前也必须跟随，否则首轮整条 strip 全 '--'（被误读为自定义模型没数据）。
+test('P3 T13 resolveActivePane: 祖先链只认白名单容器属性；结构容器跟随新会话；侧栏属性仍须已知', async () => {
   const { resolveActivePane } = await import('../app/widget.js');
   const mk = (attrs, parent) => ({
     attributes: Object.entries(attrs).map(([name, value]) => ({ name, value })),
     parentElement: parent || null, parentNode: parent || null, dataset: {},
   });
   const known = new Set(['S-real', 'S-other']);
+  const NEW_SID = '7c9e6679-7425-40de-944b-e07fc1f90ae7';
   const emptyDoc = { querySelector: () => null, querySelectorAll: () => [] };
   // 非白名单属性（旧客户端形态 data-conv-session）即使值命中已知 id → 不采纳
   const oldRoot = mk({ 'data-conv-session': 'S-real', 'data-testid': 'chat-view' });
@@ -1181,13 +1192,32 @@ test('P3 T13 resolveActivePane: 祖先链只认白名单容器属性；未知值
   assert.equal(r.method, 'attr');
   assert.deepEqual(r.diag.attrs, ['data-chat-session-standalone-conversation'],
     '诊断只记祖先链上的白名单属性名（不含值，避免把会话内容外传）');
-  // 白名单属性但值不在已知集合里 → 不采信（避免把 pane id / 随机数当会话）
-  const root2 = mk({ 'data-chat-session-standalone-conversation': 'pane-77' });
+  // 结构容器 + 值不在已知集合（新建会话，daemon 尚未发布）→ 仍采信（首轮跟随）
+  const root2 = mk({ 'data-chat-session-standalone-conversation': NEW_SID });
   const a2 = mk({ 'data-turn-status-bar': '1' }, root2);
-  assert.equal(resolveActivePane(emptyDoc, a2, known).sessionId, null, '未知值绝不采信');
-  // 已知集合为空（首轮 /state 前）→ 该级不启用，绝不猜
-  assert.equal(resolveActivePane(emptyDoc, anchor, new Set()).method !== 'attr', true,
-    '无已知 id 时不猜');
+  const r2 = resolveActivePane(emptyDoc, a2, known);
+  assert.equal(r2.sessionId, NEW_SID, '结构容器值不依赖已知集合');
+  assert.equal(r2.method, 'attr');
+  // 已知集合为空（首轮 /state 前）→ 结构容器同样采信
+  assert.equal(resolveActivePane(emptyDoc, anchor, new Set()).sessionId, 'S-real',
+    '无已知 id 时结构容器仍可跟随');
+  // 侧栏行属性 data-session-id 不是结构容器：未知值仍不采信（近似信号守门）
+  const root3 = mk({ 'data-session-id': NEW_SID });
+  const a3 = mk({ 'data-turn-status-bar': '1' }, root3);
+  assert.equal(resolveActivePane(emptyDoc, a3, known).sessionId, null,
+    'data-session-id 未知值不采信');
+});
+
+test('P3 T13b resolveActivePane: data-chat-session-id pane 的新会话 id 不依赖已知集合', async () => {
+  const { resolveActivePane } = await import('../app/widget.js');
+  const NEW_SID = '7c9e6679-7425-40de-944b-e07fc1f90ae7';
+  const own = mkPane(NEW_SID);
+  const anchor = { closest: (sel) => (sel === '[data-chat-session-id]' ? own : null) };
+  const doc = { querySelector: () => null, querySelectorAll: () => [] };
+  const r = resolveActivePane(doc, anchor, new Set(['S-known']));
+  assert.equal(r.sessionId, NEW_SID, '锚点所在 pane 的 dataset id 是结构证据');
+  assert.equal(r.method, 'anchor');
+  assert.equal(r.pane, own);
 });
 
 // ---- P3 T14：侧栏选中行信号（真机唯一可用来源，method='sidebar'）----
