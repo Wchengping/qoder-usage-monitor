@@ -186,13 +186,13 @@ test('pre-modules registry is empty; importing modules.js registers the P1.5 mod
   const pack = mods.find((m) => m.id === 'pack');
   assert.deepEqual(pack.slotIds, ['quota'], 'pack 经 slotIds 服务 quota（资源包剩余 %）槽');
   assert.equal(typeof pack.renderMini, 'function', 'pack 有 renderMini（v7 额度 %）');
-  assert.equal(pack.title, '资源包');
+  assert.equal(pack.title, '账户额度', 'v8.3：聚合含套餐内 Credits，标题不再叫「资源包」');
   const tools = mods.find((m) => m.id === 'tools');
   assert.deepEqual(tools.slotIds, ['tools'], 'tools 经 slotIds 服务 tools 槽');
   assert.equal(typeof tools.renderMini, 'function');
   assert.equal(tools.title, '工具与失败');
   assert.equal(typeof modules.pickPack, 'function');
-  assert.equal(typeof modules.quotaAgg, 'function', 'quotaAgg：套餐资源包聚合（addOn + dedicated，2026-10-30 用户反馈）');
+  assert.equal(typeof modules.quotaAgg, 'function', 'quotaAgg：账户额度聚合（userQuota + addOn + dedicated，2026-11-02 用户裁定）');
 });
 
 // ---------------------------------------------------------------- pickPack
@@ -464,17 +464,23 @@ test('v7 tools renderMini: 「工具 N · 失败 M」；tools 缺失/非对象 �
   assert.equal(findAll(full, 'qum-line').length, 7, '3 汇总行 + 4 工具行');
 });
 
-test('v7 pack renderMini: 「◔ 剩余%」（remaining/total 优先，percentage 兜底）；无账户/无额度 → ◔ --', async () => {
+test('v8.2 pack renderMini: 「剩 N%」自带剩余口径（2026-11-02 用户反馈：裸百分比易被误读成用量）；无账户/无额度 → 剩 --', async () => {
   const { getModules } = await import('../app/widget.js');
   const def = getModules().find((m) => m.id === 'pack');
-  const mini = (state) => textOf(def.renderMini({ size: 'mini', slot: 'quota', state, fmt: {} }));
-  assert.equal(mini(mock), '◔ 37.5%'); // 450 / 1200
+  const miniEl = (state) => def.renderMini({ size: 'mini', slot: 'quota', state, fmt: {} });
+  const mini = (state) => textOf(miniEl(state));
+  assert.equal(mini(mock), '剩 37.5%'); // 450 / 1200
+  assert.equal(miniEl(mock).title,
+    '额度合计（资源包）：已用 750 / 1200 cr · 剩余 450 cr（37.5%）',
+    '悬停给已用/剩余/总量——数字口径不再靠猜；段名按实际可用份列出');
   const pctOnly = JSON.parse(JSON.stringify(mock));
   const ad = pctOnly.account.raw.usage.qoderUsage.addOnQuota;
   delete ad.remaining; delete ad.used; delete ad.total; ad.percentage = 58;
-  assert.equal(mini(pctOnly), '◔ 42%', 'percentage 是已用百分比 → 剩余 42%');
-  assert.equal(mini({ ...mock, account: null }), '◔ --');
-  assert.equal(mini({ ...mock, account: { ...mock.account, raw: {}, packRem: 450 } }), '◔ --', '只有 packRem 无 used/total → 无法算百分比');
+  assert.equal(mini(pctOnly), '剩 42%', 'percentage 是已用百分比 → 剩余 42%');
+  assert.equal(miniEl(pctOnly).title, '资源包剩余 42%', '拆不出明细时只陈述剩余率，不编造已用/总量');
+  assert.equal(mini({ ...mock, account: null }), '剩 --');
+  assert.equal(mini({ ...mock, account: { ...mock.account, raw: {}, packRem: 450 } }), '剩 --', '只有 packRem 无 used/total → 无法算百分比');
+  assert.equal(miniEl({ ...mock, account: null }).title, undefined, '无数据不挂空悬停');
 });
 
 test('session 面板（面板专有）：full 五行 本会话/近30分钟/计费输入/会话id 前 8 字/模型；half 本会单行；源缺失 → 暂无数据 不猜数（P2：平均回合行删除——只归「吞吐/时长」）', async () => {
@@ -728,44 +734,52 @@ test('pack（P1.5 真仪表升级）：half 仍「剩余 N」（pickPack 链，�
   assert.equal(typeof def.renderMini, 'function', 'v7：pack 恢复 quota 迷你槽（剩余%）');
 });
 
-// ---------------------------------------------------------------- quotaAgg（2026-10-30 用户反馈：套餐分母漏专属积分）
-// 用户截图：userQuota 2,000/2,000、addOnQuota 222/2,000、dedicated「Qwen 专属积分」0/2,000。
-// 原生用量页把 addOnQuota + 每个 dedicatedResourcePackages[] 都计入额度（套餐内 Credits /
-// 资源包 / 个人专属资源包）；插件此前只读 addOnQuota → 1,778/2,000 = 89%，分母漏掉专属积分。
-// quotaAgg 聚合 addOn + dedicated（不聚合 orgResourcePackage：原生页未展示、无真机实据），
-// strip/pack/mascot 同源；plan credits（userQuota）不是资源包，仍不计入。
-test('quotaAgg：资源包聚合 = addOnQuota + dedicatedResourcePackages（分母含专属积分）；strip/pack/mascot 同源；无 total → null 不猜', async () => {
+// ---------------------------------------------------------------- quotaAgg（2026-11-02：账户额度三块全计）
+// 示例：总量 = 套餐内 Credits 2,400 + 资源包 1,200 + Qwen 专属积分 2,400 = 6,000；
+// 已用 = 2,400 + 120 + 0 = 2,520；剩余 = 0 + 1,080 + 2,400 = 3,480 → 剩余率 58%。
+// 2026-10-30 版本只聚合 addOn + dedicated（把 userQuota 当作"不是资源包"排除），
+// 2026-11-02 起套餐内 Credits 必须进入分子/分母。
+// quotaAgg 聚合 userQuota + addOnQuota + dedicatedResourcePackages[]（orgResourcePackage
+// 不计入：属于组织共享额度，不属于个人口径）；total=0 的块由 packFieldsOf 自然跳过。
+// strip/pack/mascot 同源；迷你槽前缀「剩」保留（58% 仍是剩余率，不是用量）。
+test('quotaAgg：账户额度 = 套餐内 Credits + 资源包 + 专属积分；strip/pack/mascot 同源；无 total → null 不猜', async () => {
   const modules = await import('../app/modules.js');
   const { getModules } = await import('../app/widget.js');
   const acct = {
     source: 'widget',
     fetchedAt: 1,
     raw: { usage: { qoderUsage: {
-      userQuota: { total: 2000, used: 2000, remaining: 0, percentage: 100 },
-      addOnQuota: { total: 2000, used: 222, remaining: 1778, percentage: 11.1 },
-      dedicatedResourcePackages: [{ name: 'Qwen 专属积分', total: 2000, used: 0, remaining: 2000 }],
+      userQuota: { total: 2400, used: 2400, remaining: 0, percentage: 100 },
+      addOnQuota: { total: 1200, used: 120, remaining: 1080, percentage: 10 },
+      dedicatedResourcePackages: [{ name: 'Qwen 专属积分', total: 2400, used: 0, remaining: 2400 }],
     } } },
   };
   assert.deepEqual(modules.quotaAgg(acct), {
-    used: 222, total: 4000, remaining: 3778, ratio: 0.9445,
+    used: 2520, total: 6000, remaining: 3480, ratio: 0.58,
     parts: [
-      { name: '资源包', used: 222, total: 2000, remaining: 1778 },
-      { name: 'Qwen 专属积分', used: 0, total: 2000, remaining: 2000 },
+      { name: '套餐内 Credits', used: 2400, total: 2400, remaining: 0 },
+      { name: '资源包', used: 120, total: 1200, remaining: 1080 },
+      { name: 'Qwen 专属积分', used: 0, total: 2400, remaining: 2400 },
     ],
   });
   const st = { ...mock, account: acct };
   const packDef = getModules().find((m) => m.id === 'pack');
-  assert.equal(textOf(packDef.renderMini({ size: 'mini', slot: 'quota', state: st, fmt: {} })), '◔ 94.5%', 'strip：剩余 3778/4000');
+  const mini = packDef.renderMini({ size: 'mini', slot: 'quota', state: st, fmt: {} });
+  assert.equal(textOf(mini), '剩 58%', 'strip：剩余 3480/6000 = 58%');
+  assert.equal(mini.title,
+    '额度合计（套餐内 Credits + 资源包 + Qwen 专属积分）：已用 2520 / 6000 cr · 剩余 3480 cr（58%）',
+    '悬停拆解：三块全计，58% 是剩余率');
   const full = packDef.render({ size: 'full', state: st, fmt: {} });
-  assert.equal(findAll(full, 'qum-bar-fill')[0].style.width, '5.6%', '已用 222/4000 = 5.55% → 5.6%');
-  assert.match(textOf(full), /已用\s*222 \/ 4000 · 剩余 3778 cr/, '合计行（分母含专属积分）');
-  assert.match(textOf(full), /资源包\s*222 \/ 2000/, '拆分：addOn 段');
-  assert.match(textOf(full), /Qwen 专属积分\s*0 \/ 2000/, '拆分：专属积分段');
-  assert.match(textOf(packDef.render({ size: 'half', state: st, fmt: {} })), /剩余\s*3\.8k/);
+  assert.equal(findAll(full, 'qum-bar-fill')[0].style.width, '42%', '已用 2520/6000 = 42%');
+  assert.match(textOf(full), /已用\s*2520 \/ 6000 · 剩余 3480 cr/, '合计行（三块全计）');
+  assert.match(textOf(full), /套餐内 Credits\s*2400 \/ 2400/, '拆分：套餐内 Credits 段');
+  assert.match(textOf(full), /资源包\s*120 \/ 1200/, '拆分：addOn 段');
+  assert.match(textOf(full), /Qwen 专属积分\s*0 \/ 2400/, '拆分：专属积分段');
+  assert.match(textOf(packDef.render({ size: 'half', state: st, fmt: {} })), /剩余\s*3\.5k/);
   const mascotDef = getModules().find((m) => m.id === 'mascot');
   assert.match(textOf(mascotDef.render({ size: 'half', state: st, fmt: {} })), /🙂/);
   // mock 不变：仅 addOn → 与旧口径完全一致（37.5%，现有用例即回归网）
-  assert.equal(textOf(packDef.renderMini({ size: 'mini', slot: 'quota', state: mock, fmt: {} })), '◔ 37.5%');
+  assert.equal(textOf(packDef.renderMini({ size: 'mini', slot: 'quota', state: mock, fmt: {} })), '剩 37.5%');
   // 旧链/无 total → null（绝不猜；percentage-only 仍由 mascot 的 addOn 兜底路径处理）
   assert.equal(modules.quotaAgg(null), null);
   assert.equal(modules.quotaAgg({ raw: { resourcePack: { remaining: 42 } } }), null);
@@ -924,7 +938,7 @@ test('widget 集成：mount 后 strip 出六槽单行式（tps/quota/session/too
   assert.equal(findAll(strip, 'qum-slot-label').length, 0, '无标签行（单行式）');
   const values = findAll(strip, 'qum-slot-value').map(textOf);
   assert.deepEqual(values, [
-    '⚡ 45.6 t/s', '◔ 37.5%', '12.8万 tok · 86.1% 命中 · 23 轮 · 187 次',
+    '⚡ 45.6 t/s', '剩 37.5%', '12.8万 tok · 86.1% 命中 · 23 轮 · 187 次',
     '工具 42 · 失败 3', '123.4 cr', '32.4 s',
   ]);
   assert.equal(findAll(strip, 'qum-slot').length, 6);

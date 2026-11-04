@@ -3,11 +3,18 @@
 // import 本文件即完成接线：setFmt(format.js) 注入 widget 的 ctx.fmt，registerModule 注册
 // 13 个模块（pulse/turnspeed/session/sessions/models/consumption/cache/speed/tools/pack/mascot/heatmap/metrics）。
 // v8（2026-10-30 用户裁定）：面板顶部新增 pulse（用量波形）+ turnspeed（逐轮生成速度）两张
-// full 卡片；usage（用量节奏）与 consumption 信息重复，按"删重复"裁定整体删除；资源包口径
-// 改为 quotaAgg 聚合（addOn + dedicated 专属积分），strip/pack/mascot 同源。
+// full 卡片；usage（用量节奏）与 consumption 信息重复，按"删重复"裁定整体删除；额度口径
+// 改为 quotaAgg 聚合（v8.3 起 userQuota + addOn + dedicated 专属积分），strip/pack/mascot 同源。
 // v8.1（2026-10-30 用户追加）：turnspeed 的逐轮柱可点选——所选行柱下出「第 N 轮 · HH:MM · tps」
 // 读数（role=button/tabindex/aria-pressed，Enter/Space 等效）；选中按 会话+模型+ts 记忆，
 // 10s 轮询重渲染后保留，切会话/该轮滚出窗口自动失效（绝不跨会话残留）。
+// v8.2（2026-11-02 用户反馈）：strip quota 迷你槽由裸「◔ N%」改为「剩 N%」——
+// 该数一直是额度剩余率；无口径前缀时容易被读成"用量"。悬停补已用/剩余/总量。
+// v8.3（2026-11-02 用户更正）：汇总口径漏了套餐内 Credits。额度应为 userQuota（套餐内）
+// + addOnQuota（资源包）+ dedicatedResourcePackages（专属积分）三块之和；只算后两块会
+// 把剩余率显著抬高。userQuota 自此进入分子/分母；pack 更名「账户额度」，迷你槽悬停
+// 按实际份名列出（套餐内 Credits + 资源包 + …）。orgResourcePackage 是组织共享额度，
+// 不纳入个人口径。
 // 顶层不摸 window/document：DOM 创建只发生在 render/renderMini 内（经
 // globalThis.document），因此 node --test 可直接 import 断言注册表元数据；
 // 浏览器侧由 widget.js mount() 的注册区惰性 import（补丁 client 的 loader 只
@@ -20,7 +27,7 @@
 //    两条假额度条（同一账户仪表挂两个误导性标题）整体删除，连带移除 accountQuota
 //    共享仪表、本地/账户徽标、假条 pace 刻度与重置倒计时（资源包无重置字段，不出
 //    任何倒计时——保持事实面）。
-//  - pack（资源包）升级为真仪表（v7 恢复 strip quota 槽；v8 起 strip/pack 同源 quotaAgg）：
+//  - pack（账户额度）升级为真仪表（v7 恢复 strip quota 槽；v8 起 strip/pack 同源 quotaAgg）：
 //    full = .qum-bar fill（used/total，CSS 类合法复用，无 pace tick）+ 单行「已用 750 / 1200 · 剩余 450 cr」
 //    （fmtCredits，无 k 缩写）；used/total 不可得 → 降级为仅剩余行、不出 bar。half =「剩余 N」
 //    （quotaAgg 剩余，回落 pickPack 链；链不中/无账户 → '--'）。
@@ -208,9 +215,9 @@ function addOnBlock(account) {
 }
 
 /**
- * 资源包剩余比例（0..1，供 v7 底栏 quota 槽「◔ N%」）：addOnQuota 内
+ * 旧兜底：仅 addOnQuota 的剩余比例（0..1，供 quotaAgg 不可得时 strip「剩 N%」）：
  * remaining/total → 1-used/total → 1-percentage/100（percentage 是已用百分比）；
- * 缺块/字段不可得（如仅有 packRem）→ null（呈现 '◔ --'，绝不猜）。
+ * 缺块/字段不可得（如仅有 packRem）→ null（呈现 '剩 --'，绝不猜）。
  */
 function quotaRatio(account) {
   const ad = addOnBlock(account);
@@ -285,21 +292,24 @@ function packFieldsOf(block) {
 }
 
 /**
- * 套餐资源包聚合（2026-10-30 用户反馈：分母漏 Qwen 专属积分）。
- * 原生用量页把 addOnQuota + dedicatedResourcePackages[] 都算作资源包，用户实际可用额度
- * 是两者之和；插件此前只读 addOnQuota → 1,778/2,000 = 89%，分母漏掉专属积分。
- * 聚合 addOnQuota + 每个 dedicatedResourcePackages（**不**聚合 orgResourcePackage：原生页
- * 未展示、无真机实据）；plan credits（userQuota）不是资源包，同样不计入。
+ * 账户额度聚合（2026-11-02 用户更正：套餐内 Credits 也必须进分子/分母）。
+ * 原生用量页的用户实际可用额度 = 套餐内 Credits（userQuota）+ 资源包（addOnQuota）
+ * + 每个 dedicatedResourcePackages（如 Qwen 专属积分）。示例：三块总量分别 2400 / 1200 /
+ * 2400、已用 2400 / 120 / 0 → 合计总量 6000、剩余 3480 → 剩余率 58%。2026-10-30 版本把
+ * userQuota 当作"不是资源包"排除，分母漏掉套餐内 Credits，剩余率会虚高，已被用户否定。
+ * **不**聚合 orgResourcePackage：它是组织共享额度，暂不纳入个人额度口径。
  * 返回 {used,total,remaining,ratio,parts:[{name,used,total,remaining}]}；ratio = 剩余/总量
- * （4 位小数，与 barPcts 同规）。任一份缺 total/拆不出 used|remaining → 该份跳过；一个
- * 可用份都没有 → null（调用方回落旧 addOn/pickPack 链，绝不猜）。首个含可用份的
- * qoderUsage 壳即返回，避免 {usage,plan} 多壳重复累加。
+ * （4 位小数，与 barPcts 同规）。任一份缺 total/拆不出 used|remaining → 该份跳过（Free 账户
+ * userQuota 全 0 因此自然不进分子/分母）；一个可用份都没有 → null（调用方回落旧 addOn/
+ * pickPack 链，绝不猜）。首个含可用份的 qoderUsage 壳即返回，避免 {usage,plan} 多壳重复累加。
  */
 export function quotaAgg(account) {
   const a = account && typeof account === 'object' ? account : null;
   if (!a || !a.raw || typeof a.raw !== 'object') return null;
   for (const qu of qoderShells(a.raw)) {
     const parts = [];
+    const plan = packFieldsOf(qu.userQuota);
+    if (plan) parts.push({ name: '套餐内 Credits', ...plan });
     const addOn = packFieldsOf(qu.addOnQuota);
     if (addOn) parts.push({ name: '资源包', ...addOn });
     const list = Array.isArray(qu.dedicatedResourcePackages) ? qu.dedicatedResourcePackages : [];
@@ -1431,21 +1441,24 @@ const tools = {
   },
 };
 
-// 资源包即真实模型的"额度"面：addOnQuota{used,total,remaining,percentage,unit:'credits'}。
-// 2026-10-30 用户反馈：套餐用户的资源包不止 addOnQuota——dedicatedResourcePackages（如
-// 「Qwen 专属积分」）也是可用额度，原生页把两者都计入。故 strip/pack 统一先走 quotaAgg
-// （addOn + dedicated 聚合，分母含专属积分），聚合不可得（旧账户形态/仅有 percentage）才
-// 回落此前的 addOn/pickPack 链——旧口径逐字节不变。
+// 账户额度即真实模型的"额度"面：userQuota（套餐内 Credits）+ addOnQuota（资源包）
+// + dedicatedResourcePackages（如「Qwen 专属积分」），原生用量页把三者都计入。
+// 2026-11-02 用户更正：2026-10-30 版本只聚合 addOn + dedicated，把套餐内 Credits 漏在
+// 分母外，剩余率会虚高，已被明确否定。故 strip/pack 统一先走 quotaAgg（三块全计），
+// 聚合不可得（旧账户形态/仅有 percentage）才回落此前的 addOn/pickPack 链——旧口径逐字节不变。
 // Strip layout v7（2026-10-26 用户裁定：对齐客户端原生底栏）：pack 经 slotIds:['quota'] 提供
-// 「◔ N%」剩余比例迷你槽（quotaAgg 剩余率，回落 remaining/total → 1-used/total →
-// 1-percentage/100；仅有 packRem 或无账户 → '◔ --'，绝不猜）。
-// full：.qum-bar fill = used/total（CSS 类合法复用；资源包无重置字段 → 无 pace tick、
-// 无倒计时、无徽标——保持事实）+ 一行「已用 750 / 1200 · 剩余 450 cr」（fmtCredits
+// 剩余比例迷你槽（quotaAgg 剩余率，回落 remaining/total → 1-used/total →
+// 1-percentage/100；仅有 packRem 或无账户 → '剩 --'，绝不猜）。
+// v8.2（2026-11-02）：裸百分比被读成用量，故单行必须带「剩」字；悬停给已用/剩余/总量明细。
+// v8.3（2026-11-02）：标题「账户额度」；悬停的汇总口径按实际份名列出（套餐内 Credits +
+// 资源包 + Qwen 专属积分），不再写死"不含套餐内 Credits"。
+// full：.qum-bar fill = used/total（CSS 类合法复用；额度无重置字段 → 无 pace tick、
+// 无倒计时、无徽标——保持事实）+ 一行「已用 X / Y · 剩余 Z cr」（fmtCredits
 // 无 k 缩写，与客户端用量页对账）+（多份时）每份拆分行。used/total 不可得 → 降级为仅剩余行。
 // half：「剩余 N」（quotaAgg 剩余，回落 pickPack 候选链原样，含 packRem 优先）。
 const pack = {
   id: 'pack',
-  title: '资源包',
+  title: '账户额度',
   supports: ['half', 'full'],
   defaultSize: 'half',
   slotIds: ['quota'],
@@ -1454,7 +1467,16 @@ const pack = {
     const acct = ctx && ctx.state && ctx.state.account;
     const agg = quotaAgg(acct);
     const r = agg ? agg.ratio : quotaRatio(acct);
-    return h('span', 'qum-mini', `◔ ${r === null ? '--' : f.fmtPct(r)}`);
+    // 2026-11-02 用户反馈：裸百分比被读成"用量"。单行必须自带口径字样；悬停补
+    // 已用/剩余/总量，汇总口径按实际份名列出（v8.3：套餐内 Credits 也计入）。
+    const el = h('span', 'qum-mini', `剩 ${r === null ? '--' : f.fmtPct(r)}`);
+    if (agg) {
+      el.title = `额度合计（${agg.parts.map((p) => p.name).join(' + ')}）：已用 ${f.fmtCredits(agg.used)}`
+        + ` / ${f.fmtCredits(agg.total)} cr · 剩余 ${f.fmtCredits(agg.remaining)} cr（${f.fmtPct(agg.ratio)}）`;
+    } else if (r !== null) {
+      el.title = `资源包剩余 ${f.fmtPct(r)}`;
+    }
+    return el;
   },
   render(ctx) {
     const f = fmtOf(ctx);
@@ -1509,8 +1531,8 @@ const mascot = {
   defaultSize: 'half',
   render(ctx) {
     const st = ctx.state;
-    // P1.5 rekey（阈值改读真资源包，假 quota 仪表已删）：无账户数据 → 🫥；
-    // 剩余率 = quotaAgg（addOn + dedicated 聚合，2026-10-30 与 strip 同源）；
+    // P1.5 rekey（阈值改读真额度，假 quota 仪表已删）：无账户数据 → 🫥；
+    // 剩余率 = quotaAgg（v8.3 起 userQuota + addOn + dedicated 聚合，与 strip 同源）；
     // 聚合不可得 → addOnQuota used/total 优先、percentage（0–100）兜底；有账户但读不出 → 🙂 中性。
     const acct = st && st.account;
     const hasAcctData = !!(acct && acct.raw && typeof acct.raw === 'object');

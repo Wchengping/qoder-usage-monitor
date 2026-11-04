@@ -28,7 +28,8 @@ export const LAYOUT_STORAGE_KEY = 'qum.layout.v1';
 export const COLLAPSED_STORAGE_KEY = 'qum.collapsed.v1';
 // P2 一级折叠：只存“折叠(true)”的模块 id，展开即删键；缺省/脏值 → 全展开（fail-open）。
 // Strip layout v7（2026-10-26 用户裁定：对齐客户端原生底栏，接替 v6）：单行六槽 =
-// 会话生成速度 tps（⚡ N.N t/s）+ 资源包剩余 quota（◔ N%）+ 会话簇 session（N万 tok ·
+// 会话生成速度 tps（⚡ N.N t/s）+ 账户额度剩余 quota（剩 N%，v8.2 加口径前缀；
+// v8.3 口径含套餐内 Credits）+ 会话簇 session（N万 tok ·
 // 命中% · 轮 · 请求）+ 工具/失败 tools + 会话累计 credits + 末轮耗时 turnsec。悬停出摘要卡
 // （精确千分位），点击仍打开完整面板。v7 哨兵：每槽可迷你 且 含 session/tools/credits 且
 // 不含 model——v4/v5（含 model）/v6（缺 session/tools）存档 → 整条回落 v7 默认。

@@ -1,15 +1,15 @@
 # Qoder Usage Monitor
 
-本机 Qoder 桌面客户端的用量监控小工具。它在 Qoder 窗口中注入一条底栏和一个可展开面板，显示本地 token / credits 消耗、账户资源包余额、会话与工具统计、用量热力和累计指标。
+本机 Qoder 桌面客户端的用量监控小工具。它在 Qoder 窗口中注入一条底栏和一个可展开面板，显示本地 token / credits 消耗、账户额度余额、会话与工具统计、用量热力和累计指标。
 
 所有数据都在本机处理：daemon 只监听 `127.0.0.1`，不上传任何内容。
 
 ## 功能
 
-- **底栏**：吞吐、资源包剩余比例、会话累计、工具调用、credits、最近回合耗时，以及上次分析时刻。
-- **面板**：用量波形、逐轮生成速度、token 消耗、缓存命中、吞吐/时长、工具与失败、会话明细、模型分布、资源包、用量热力、累计指标。
+- **底栏**：吞吐、账户额度剩余比例、会话累计、工具调用、credits、最近回合耗时，以及上次分析时刻。
+- **面板**：用量波形、逐轮生成速度、token 消耗、缓存命中、吞吐/时长、工具与失败、会话明细、模型分布、账户额度、用量热力、累计指标。
 - **两种计费口径**：内置模型按 credits，BYOK（`qoder-custom-*`）按 token；主数字优先显示实际扣减的 credits，名义值和未扣减量只放进 tooltip。
-- **账户数据**：通过 Qoder 渲染进程已鉴权的 `window.qoderDesktop` IPC 读取，并解析 `userQuota` / `addOnQuota` / `dedicatedResourcePackages` / 热力 / 累计指标。
+- **账户数据**：通过 Qoder 渲染进程已鉴权的 `window.qoderDesktop` IPC 读取，并解析 `userQuota` / `addOnQuota` / `dedicatedResourcePackages` / 热力 / 累计指标。额度按「套餐内 Credits + 资源包 + 个人专属资源包」三块合计；组织共享资源包（`orgResourcePackage`）属于共享额度，暂不纳入个人口径。
 - **本地统计**：递归扫描 Qoder 会话与子代理 JSONL，按 5 小时滚动窗口、本地自然日/周聚合；uuid 去重，跳过 `<synthetic>` 记录。输出 token 有真实 `usage.output_tokens` 时用真值，缺失才按正文估算；小数类数值统一保留一位小数（计数仍为整数），估算值不加近似符号。
 
 ## 隐私与安全
